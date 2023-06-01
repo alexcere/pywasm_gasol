@@ -26,6 +26,7 @@ class ValueType(int):
             convention.i64: 'i64',
             convention.f32: 'f32',
             convention.f64: 'f64',
+            convention.symbolic: 'sym'
         }[self]
 
     @classmethod
@@ -669,6 +670,27 @@ class Expression:
         o.position = cls.mark(o.data)
         return o
 
+    @classmethod
+    def blocks_from_instructions(cls, data: typing.List[Instruction]):
+        blocks = []
+        current_block = []
+        for instr in data:
+            if instr.opcode in [instruction.block, instruction.loop, instruction.if_]:
+                blocks.append(current_block)
+                current_block = [instr]
+            elif instr.opcode == instruction.end:
+                current_block.append(instr)
+                blocks.append(current_block)
+                current_block = []
+            else:
+                current_block.append(instr)
+
+        if len(current_block) > 0:
+            blocks.append(current_block)
+
+        return blocks
+
+
 
 class Global:
     # The globals component of a module defines a vector of global variables (or globals for short):
@@ -876,6 +898,7 @@ class Func:
     def __init__(self):
         self.local_list: typing.List[Locals] = []
         self.expr: Expression = Expression()
+        self.expr_blocks = []
 
     def __repr__(self):
         return f'func({self.local_list}, {self.expr})'
@@ -886,6 +909,7 @@ class Func:
         n = leb128.u.decode_reader(r)[0]
         o.local_list = [Locals.from_reader(r) for i in range(n)]
         o.expr = Expression.from_reader(r)
+        o.expr_blocks = Expression.blocks_from_instructions(o.expr.data)
         return o
 
 
@@ -936,6 +960,7 @@ class CodeSection:
         o = CodeSection()
         n = leb128.u.decode_reader(r)[0]
         o.data = [Code.from_reader(r) for _ in range(n)]
+        o.data_blocks = [expression.func.expr_blocks for expression in o.data]
         return o
 
 
