@@ -9,6 +9,7 @@ i32 = i64 = int
 u32 = u64 = int
 f32 = numpy.float32
 f64 = numpy.float64
+sym = str
 
 
 def int2u32(i: int) -> u32:

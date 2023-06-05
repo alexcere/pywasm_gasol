@@ -1,3 +1,4 @@
+import copy
 import typing
 
 import numpy
@@ -23,13 +24,17 @@ class Value:
     def __repr__(self):
         return f'{self.type} {self.val()}'
 
+    def __str__(self):
+        return f'{self.val()}'
+
     @classmethod
-    def new(cls, type: binary.ValueType, data: typing.Union[int, float]):
+    def new(cls, type: binary.ValueType, data: typing.Union[int, float, str]):
         return {
             convention.i32: Value.from_i32,
             convention.i64: Value.from_i64,
             convention.f32: lambda x: Value.from_f32(num.f32(x)),
             convention.f64: lambda x: Value.from_f64(num.f64(x)),
+            convention.symbolic: Value.from_symbolic,
         }[type](data)
 
     @classmethod
@@ -45,6 +50,7 @@ class Value:
             convention.i64: self.i64,
             convention.f32: self.f32,
             convention.f64: self.f64,
+            convention.symbolic: self.sym,
         }[self.type]()
 
     def i32(self) -> num.i32:
@@ -64,6 +70,9 @@ class Value:
 
     def f64(self) -> num.f64:
         return num.LittleEndian.f64(self.data[0:8])
+
+    def sym(self) -> num.sym:
+        return self.data
 
     @classmethod
     def from_i32(cls, n: num.i32):
@@ -119,6 +128,13 @@ class Value:
     def from_f64_u64(cls, n: num.u64):
         o = Value.from_u64(n)
         o.type = binary.ValueType(convention.f64)
+        return o
+
+    @classmethod
+    def from_symbolic(cls, n: num.sym):
+        o = Value()
+        o.type = binary.ValueType(convention.symbolic)
+        o.data = n
         return o
 
 
@@ -504,9 +520,160 @@ class Configuration:
         return Result(r)
 
 
+class AbstractConfiguration:
+    # A configuration consists of the current store and an executing thread.
+    # A thread is a computation over instructions that operates relative to a current frame referring to the module
+    # instance in which the computation runs, i.e., where the current function originates from.
+    #
+    # config ::= store;thread
+    # thread ::= frame;instr∗
+    def __init__(self, store: Store):
+        self.initial_store = store
+        self.store = None
+        self.frame = None
+        self.stack = None
+        self.depth = None
+        self.pc = None
+        self.opts = None
+
+    def init_stack_size(self, block: typing.List[binary.Instruction]):
+        current_stack = 0
+        init_stack = 0
+
+        for instr in block:
+
+            if instr.name == "call":
+                instr = ArithmeticLogicUnit.instr_from_call(self, instr)
+            elif instr.name == "call_indirect":
+                instr = ArithmeticLogicUnit.instr_from_call(self, instr)
+            else:
+                pass
+
+            consumed_elements = instr.in_arity
+            produced_elements = instr.out_arity
+
+            if consumed_elements > current_stack:
+                diff = consumed_elements - current_stack
+                init_stack += diff
+                current_stack = current_stack + diff - consumed_elements + produced_elements
+            else:
+                current_stack = current_stack - consumed_elements + produced_elements
+
+        print(init_stack)
+        return init_stack
+
+    def initialize_store(self):
+        self.store = copy.deepcopy(self.initial_store)
+
+        # Change store global values by generic values
+        # Non-mutable values remain the same as initially
+        symbolic_globals = [global_value if not global_value.mut else Value.new(convention.symbolic, f"global_{i}")
+                            for i, global_value in enumerate(self.store.global_list)]
+        self.store.global_list = symbolic_globals
+
+
+    def initialize_stack(self, block: typing.List[binary.Instruction]):
+        stack_size = self.init_stack_size(block)
+        stack = Stack()
+        initial_values = [Value.new(convention.symbolic, f"s_{i}") for i in range(stack_size)]
+        for val in initial_values:
+            stack.append(val)
+        self.stack = stack
+
+    def initialize_block(self, block: typing.List[binary.Instruction]):
+        self.initialize_store()
+        self.initialize_stack(block)
+        self.depth = 0
+        self.pc = 0
+        self.opts: option.Option = option.Option()
+
+    def get_label(self, i: int) -> Label:
+        l = self.stack.len()
+        x = i
+        for a in range(l):
+            j = l - a - 1
+            v = self.stack.data[j]
+            if isinstance(v, Label):
+                if x == 0:
+                    return v
+                x -= 1
+
+    def set_frame(self, frame: Frame):
+        self.frame = frame
+
+    def call_symbolic(self, function_addr: FunctionAddress, function_args: typing.List[Value]):
+        function = self.initial_store.function_list[function_addr]
+        log.debugln(f'call {function}({function_args})')
+        # for e, t in zip(function_args, function.type.args.data):
+        #     assert e.type == t
+        assert len(function.type.rets.data) < 2
+
+        if isinstance(function, WasmFunc):
+            local_list = [Value.new(convention.symbolic, f"local_{i}") for i in range(len(function.code.local_list))]
+            frame = Frame(
+                module=function.module,
+                local_list=function_args + local_list,
+                expr=function.code.expr,
+                arity=len(function.type.rets.data),
+            )
+            self.set_frame(frame)
+            self.exec_symbolic()
+            return
+        if isinstance(function, HostFunc):
+            raise Exception(f'pywasm_gasol: host function not allowed to be executed')
+        raise Exception(f'pywasm: unknown function type: {function}')
+
+    def exec_symbolic(self):
+
+        blocks = binary.Expression.blocks_from_instructions(self.frame.expr.data)
+        for i, block in enumerate(blocks):
+            print(f"Analyzing block {i}")
+            self.exec_symbolic_block(block)
+
+    def exec_symbolic_block(self, block: typing.List[binary.Instruction]):
+        # Remove labels
+        basic_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
+                       instr.opcode not in instruction.end_basic_block_instrs]
+        self.initialize_block(basic_block)
+
+        memory_accesses = []
+        var_accesses = []
+        call_accesses = []
+
+        for i, instr in enumerate(basic_block):
+            ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
+
+        print(f"Stack: {' '.join(str(elem) for elem in self.stack.data)}")
+        print(f"Memory access: {memory_accesses}")
+        print(f"Variable access: {var_accesses}")
+        print(f"Call access: {call_accesses}")
+
+
 # ======================================================================================================================
 # Instruction Set
 # ======================================================================================================================
+
+
+def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> str:
+
+    # First we remove from the stack the elements that have been consumed
+    operands = [config.stack.pop() for _ in range(i.in_arity)]
+
+    # To have a canonical representation, we sort the args in comm operations
+    if i.comm:
+        operands = sorted(operands, key=lambda x: str(x))
+
+    instr_name = i.name
+    joined_operands = f"({','.join([str(op) for op in operands])})" if len(operands) > 0 else ""
+    joined_args = f"[{','.join([str(arg) for arg in i.args])}]" if len(i.args) > 0 else ""
+    expr = f'{instr_name}{joined_args}{joined_operands}'
+
+    ar = i.out_arity
+    # Then we introduce the values in the stack
+    while ar > 0:
+        config.stack.append(f"{expr}_{ar}")
+        ar -= 1
+    return expr
 
 
 class ArithmeticLogicUnit:
@@ -517,6 +684,47 @@ class ArithmeticLogicUnit:
             log.println('|', i)
         func = _INSTRUCTION_TABLE[i.opcode]
         func(config, i)
+
+
+    @staticmethod
+    def exec_symbolic(config: AbstractConfiguration, i: binary.Instruction, idx: int, memory_accesses: typing.List[str],
+                      var_accesses: typing.List[str], call_accesses: typing.List[str]):
+        # Exec symbolic: execute if the concrete instruction if the args are concrete.
+        # Otherwise, consume the corresponding elements and annotate the mem access
+        # (globals, locals or the linear memory)
+
+        if log.lvl > 0:
+            log.println('|', i)
+
+        func = _INSTRUCTION_TABLE[i.opcode]
+
+        if i.type == instruction.InstructionType.control:
+            # Control instructions include nop and call.
+            # Call indirect is not allowed because the types are only known in execution time
+            if i.opcode == instruction.nop:
+                pass
+            elif i.opcode == instruction.call:
+                call_expr = ArithmeticLogicUnit.call_symbolic(config, i)
+                call_accesses.append(f"{call_expr}_{idx}")
+            # elif i.opcode == instruction.call_indirect:
+            #     call_expr = ArithmeticLogicUnit.call_indirect_symbolic(config, i)
+            #     call_accesses.append(f"{call_expr}_{idx}")
+
+        elif i.type == instruction.InstructionType.variable:
+            var_expr = symbolic_func(config, i)
+            var_accesses.append(f"{var_expr}_{idx}")
+
+        elif i.type == instruction.InstructionType.memory:
+            mem_expr = symbolic_func(config, i)
+            memory_accesses.append(f"{mem_expr}_{idx}")
+        else:
+            # Either numeric or parametric instruction. We only try executing if all the values in the stack
+            # are not symbolic
+            if any(val for val in config.stack.data[-1:-i.in_arity-1:-1]):
+                symbolic_func(config, i)
+            else:
+                func(config, i)
+
 
     @staticmethod
     def unreachable(config: Configuration, i: binary.Instruction):
@@ -658,10 +866,39 @@ class ArithmeticLogicUnit:
         for e in r.data:
             config.stack.append(e)
 
+
+    @staticmethod
+    def call_instruction_from_address(config: AbstractConfiguration, function_addr: FunctionAddress):
+        function: FunctionInstance = config.store.function_list[function_addr]
+        function_type = function.type
+
+        new_instr = binary.Instruction()
+
+        # We identify the instructions by its address
+        new_instr.opcode = function_addr
+        new_instr.args: typing.List[typing.Any] = []
+        new_instr.type: instruction.InstructionType = instruction.InstructionType.control
+        new_instr.in_arity: int = len(function_type.args.data)
+        new_instr.out_arity: int = len(function.type.rets.data)
+        new_instr.comm = False
+        return new_instr
+
     @staticmethod
     def call(config: Configuration, i: binary.Instruction):
         function_addr: binary.FunctionIndex = i.args[0]
         ArithmeticLogicUnit.call_function_addr(config, function_addr)
+
+
+    @staticmethod
+    def instr_from_call(config: AbstractConfiguration, i: binary.Instruction):
+        function_addr: binary.FunctionIndex = i.args[0]
+        instr = ArithmeticLogicUnit.call_instruction_from_address(config, function_addr)
+        return instr
+
+    @staticmethod
+    def call_symbolic(config: AbstractConfiguration, i: binary.Instruction):
+        instr = ArithmeticLogicUnit.instr_from_call(config, i)
+        return symbolic_func(config, instr)
 
     @staticmethod
     def call_indirect(config: Configuration, i: binary.Instruction):
@@ -676,6 +913,26 @@ class ArithmeticLogicUnit:
         if function_addr is None:
             raise Exception('pywasm: uninitialized element')
         ArithmeticLogicUnit.call_function_addr(config, function_addr)
+
+    @staticmethod
+    def instr_from_call_indirect(config: AbstractConfiguration, i: binary.Instruction):
+        if i.args[1] != 0x00:
+            raise Exception("pywasm: zero byte malformed in call_indirect")
+        ta = config.frame.module.table_addr_list[0]
+        tab = config.store.table_list[ta]
+        idx = config.stack.pop().i32()
+        if not 0 <= idx < len(tab.element_list):
+            raise Exception('pywasm: undefined element')
+        function_addr = tab.element_list[idx]
+        if function_addr is None:
+            raise Exception('pywasm: uninitialized element')
+        instr = ArithmeticLogicUnit.call_instruction_from_address(config, function_addr)
+        return symbolic_func(config, instr)
+
+    @staticmethod
+    def call_indirect_symbolic(config: AbstractConfiguration, i: binary.Instruction):
+        instr = ArithmeticLogicUnit.instr_from_call_indirect(config, i)
+        return symbolic_func(config, instr)
 
     @staticmethod
     def drop(config: Configuration, i: binary.Instruction):
@@ -2109,3 +2366,8 @@ class Machine:
         config = Configuration(self.store)
         config.opts = self.opts
         return config.call(function_addr, function_args)
+
+    def invocate_symbolic(self, function_addr: FunctionAddress, function_args: typing.List[Value]) -> Result:
+        config = AbstractConfiguration(self.store)
+        config.opts = self.opts
+        return config.call_symbolic(function_addr, function_args)

@@ -83,6 +83,17 @@ class Runtime:
             return resp.data[0].val()
         return [e.val() for e in resp.data]
 
+    def symbolic_exec(self, name: str):
+        func_addr = self.func_addr(name)
+        func = self.machine.store.function_list[func_addr]
+        func_args = []
+        # Mapping check for python valtype to webAssembly valtype
+        for i, e in enumerate(func.type.args.data):
+            v = execution.Value.new(convention.symbolic, f"in_{i}")
+            func_args.append(v)
+        func_addr = self.func_addr(name)
+        self.machine.invocate_symbolic(func_addr, func_args)
+
 
 # Using the pywasm API.
 # If you have already compiled a module from another language using tools like Emscripten, or loaded and run the code

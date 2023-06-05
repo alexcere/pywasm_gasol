@@ -221,6 +221,11 @@ class Instruction:
     def __init__(self):
         self.opcode: int = 0x00
         self.args: typing.List[typing.Any] = []
+        self.type: instruction.InstructionType = instruction.InstructionType.parametric
+        self.in_arity: int = 0
+        self.out_arity: int = 0
+        self.name: str = ""
+        self.comm: bool = False
 
     def __repr__(self):
         return f'{instruction.opcode[self.opcode][0]} {self.args}'
@@ -229,6 +234,11 @@ class Instruction:
     def from_reader(cls, r: typing.BinaryIO):
         o = Instruction()
         o.opcode: int = ord(r.read(1))
+        o.name = instruction.opcode_info[o.opcode]["name"]
+        o.type = instruction.opcode_info[o.opcode]["type"]
+        o.in_arity = instruction.opcode_info[o.opcode]["in_ar"]
+        o.out_arity = instruction.opcode_info[o.opcode]["out_ar"]
+        o.comm = instruction.opcode_info[o.opcode]["comm"]
         o.args = []
         if o.opcode in [
             instruction.block,
@@ -675,10 +685,10 @@ class Expression:
         blocks = []
         current_block = []
         for instr in data:
-            if instr.opcode in [instruction.block, instruction.loop, instruction.if_]:
+            if instr.opcode in instruction.beginning_basic_block_instrs:
                 blocks.append(current_block)
                 current_block = [instr]
-            elif instr.opcode == instruction.end:
+            elif instr.opcode in instruction.end_basic_block_instrs:
                 current_block.append(instr)
                 blocks.append(current_block)
                 current_block = []
