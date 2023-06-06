@@ -641,17 +641,19 @@ class AbstractConfiguration:
             print(f"Analyzing block {i}")
             self.exec_symbolic_block(block)
 
-    def print_block(self, instructions, memory_accesses, var_accesses, call_accesses):
-        print("Instructions:")
-        print('\n'.join([str(i) for i in instructions]))
+    def print_block(self, stack, memory_accesses, var_accesses, call_accesses):
         print(f"Stack:")
-        print('\n'.join(str(elem) for elem in self.stack.data[::-1]))
+        print('\n'.join(str(elem) for elem in stack.data[::-1]))
+        print("")
         print("Memory access:")
         print('\n'.join([f'({idx}, {str(term)})' for idx, term in memory_accesses]))
+        print("")
         print("Variable access:")
         print('\n'.join([f'({idx}, {str(term)})' for idx, term in var_accesses]))
+        print("")
         print("Call access:")
         print('\n'.join([f'({idx}, {str(term)})' for idx, term in call_accesses]))
+        print("")
 
     def exec_symbolic_block(self, block: typing.List[binary.Instruction]):
         # Remove labels
@@ -662,8 +664,11 @@ class AbstractConfiguration:
         memory_accesses = []
         var_accesses = []
         call_accesses = []
+        states = []
 
         for i, instr in enumerate(basic_block):
+            states.append([i, instr, copy.deepcopy(self.stack), copy.deepcopy(memory_accesses),
+                           copy.deepcopy(var_accesses), copy.deepcopy(call_accesses)])
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
         values_args = set()
@@ -679,7 +684,20 @@ class AbstractConfiguration:
                     values_args.add(current_arg)
 
         if found:
-            self.print_block(basic_block, memory_accesses, var_accesses, call_accesses)
+
+            print("")
+            print("Instructions:")
+            print('\n'.join([str(i) for i in basic_block]))
+            print("")
+            print("")
+
+            for state in states:
+                i, instr, stack, m_accesses, v_accesses, c_accesses = state
+                print(f"Step {i}: {str(instr)}")
+                self.print_block(stack, m_accesses, v_accesses, c_accesses)
+
+            print(f"Final state:")
+            self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
 
 
 
