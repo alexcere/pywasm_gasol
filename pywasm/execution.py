@@ -612,8 +612,7 @@ class AbstractConfiguration:
     def set_frame(self, frame: Frame):
         self.frame = frame
 
-    def call_symbolic(self, function_addr: FunctionAddress, function_args: typing.List[Value]):
-        function = self.initial_store.function_list[function_addr]
+    def call_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value]):
         log.debugln(f'call {function}({function_args})')
         # for e, t in zip(function_args, function.type.args.data):
         #     assert e.type == t
@@ -691,10 +690,10 @@ class AbstractConfiguration:
             print("")
             print("")
 
-            for state in states:
-                i, instr, stack, m_accesses, v_accesses, c_accesses = state
-                print(f"Step {i}: {str(instr)}")
-                self.print_block(stack, m_accesses, v_accesses, c_accesses)
+            # for state in states:
+            #     i, instr, stack, m_accesses, v_accesses, c_accesses = state
+            #     print(f"Step {i}: {str(instr)}")
+            #     self.print_block(stack, m_accesses, v_accesses, c_accesses)
 
             print(f"Final state:")
             self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
@@ -2420,7 +2419,7 @@ class Machine:
         config.opts = self.opts
         return config.call(function_addr, function_args)
 
-    def invocate_symbolic(self, function_addr: FunctionAddress, function_args: typing.List[Value]) -> Result:
+    def invocate_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value]) -> Result:
         config = AbstractConfiguration(self.store)
         config.opts = self.opts
-        return config.call_symbolic(function_addr, function_args)
+        return config.call_symbolic(function, function_args)
