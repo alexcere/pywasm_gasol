@@ -138,6 +138,18 @@ class Value:
         return o
 
 
+class Term:
+    # A term consists of either a value or an instruction applied to other terms.
+
+    def __init__(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]]):
+        self.instr: binary.Instruction = instr
+        self.ops: typing.List[typing.Union['Term', Value]] = operands
+
+    def __str__(self):
+        joined_operands = f"({','.join([str(op) for op in self.ops])})" if len(self.ops) > 0 else ""
+        return f"{self.instr}{joined_operands}"
+
+
 class Result:
     # A result is the outcome of a computation. It is either a sequence of values or a trap.
     def __init__(self, data: typing.List[Value]):
@@ -559,7 +571,6 @@ class AbstractConfiguration:
             else:
                 current_stack = current_stack - consumed_elements + produced_elements
 
-        print(init_stack)
         return init_stack
 
     def initialize_store(self):
@@ -630,6 +641,18 @@ class AbstractConfiguration:
             print(f"Analyzing block {i}")
             self.exec_symbolic_block(block)
 
+    def print_block(self, instructions, memory_accesses, var_accesses, call_accesses):
+        print("Instructions:")
+        print('\n'.join([str(i) for i in instructions]))
+        print(f"Stack:")
+        print('\n'.join(str(elem) for elem in self.stack.data[::-1]))
+        print("Memory access:")
+        print('\n'.join([f'({idx}, {str(term)})' for idx, term in memory_accesses]))
+        print("Variable access:")
+        print('\n'.join([f'({idx}, {str(term)})' for idx, term in var_accesses]))
+        print("Call access:")
+        print('\n'.join([f'({idx}, {str(term)})' for idx, term in call_accesses]))
+
     def exec_symbolic_block(self, block: typing.List[binary.Instruction]):
         # Remove labels
         basic_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
@@ -643,10 +666,21 @@ class AbstractConfiguration:
         for i, instr in enumerate(basic_block):
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
-        print(f"Stack: {' '.join(str(elem) for elem in self.stack.data)}")
-        print(f"Memory access: {memory_accesses}")
-        print(f"Variable access: {var_accesses}")
-        print(f"Call access: {call_accesses}")
+        values_args = set()
+        found = False
+        for idx, term in var_accesses:
+            current_args = term.instr.args
+            if len(current_args) > 0:
+                assert len(current_args) == 1
+                current_arg = current_args[0]
+                if current_arg in values_args:
+                    found = True
+                elif term.instr.name == "local.set":
+                    values_args.add(current_arg)
+
+        if found:
+            self.print_block(basic_block, memory_accesses, var_accesses, call_accesses)
+
 
 
 # ======================================================================================================================
@@ -654,7 +688,7 @@ class AbstractConfiguration:
 # ======================================================================================================================
 
 
-def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> str:
+def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> Term:
 
     # First we remove from the stack the elements that have been consumed
     operands = [config.stack.pop() for _ in range(i.in_arity)]
@@ -663,17 +697,16 @@ def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> str:
     if i.comm:
         operands = sorted(operands, key=lambda x: str(x))
 
-    instr_name = i.name
-    joined_operands = f"({','.join([str(op) for op in operands])})" if len(operands) > 0 else ""
-    joined_args = f"[{','.join([str(arg) for arg in i.args])}]" if len(i.args) > 0 else ""
-    expr = f'{instr_name}{joined_args}{joined_operands}'
-
+    result = Term(i, operands)
     ar = i.out_arity
     # Then we introduce the values in the stack
     while ar > 0:
-        config.stack.append(f"{expr}_{ar}")
+        if i.out_arity > 1:
+            config.stack.append(Value.from_symbolic(f"{result}_{ar}"))
+        else:
+            config.stack.append(Value.from_symbolic(str(result)))
         ar -= 1
-    return expr
+    return result
 
 
 class ArithmeticLogicUnit:
@@ -687,8 +720,10 @@ class ArithmeticLogicUnit:
 
 
     @staticmethod
-    def exec_symbolic(config: AbstractConfiguration, i: binary.Instruction, idx: int, memory_accesses: typing.List[str],
-                      var_accesses: typing.List[str], call_accesses: typing.List[str]):
+    def exec_symbolic(config: AbstractConfiguration, i: binary.Instruction, idx: int,
+                      memory_accesses: typing.List[typing.Tuple[int, Term]],
+                      var_accesses: typing.List[typing.Tuple[int, Term]],
+                      call_accesses: typing.List[typing.Tuple[int, Term]]):
         # Exec symbolic: execute if the concrete instruction if the args are concrete.
         # Otherwise, consume the corresponding elements and annotate the mem access
         # (globals, locals or the linear memory)
@@ -705,18 +740,18 @@ class ArithmeticLogicUnit:
                 pass
             elif i.opcode == instruction.call:
                 call_expr = ArithmeticLogicUnit.call_symbolic(config, i)
-                call_accesses.append(f"{call_expr}_{idx}")
+                call_accesses.append((idx, call_expr))
             # elif i.opcode == instruction.call_indirect:
             #     call_expr = ArithmeticLogicUnit.call_indirect_symbolic(config, i)
             #     call_accesses.append(f"{call_expr}_{idx}")
 
         elif i.type == instruction.InstructionType.variable:
             var_expr = symbolic_func(config, i)
-            var_accesses.append(f"{var_expr}_{idx}")
+            var_accesses.append((idx, var_expr))
 
         elif i.type == instruction.InstructionType.memory:
             mem_expr = symbolic_func(config, i)
-            memory_accesses.append(f"{mem_expr}_{idx}")
+            memory_accesses.append((idx, mem_expr))
         else:
             # Either numeric or parametric instruction. We only try executing if all the values in the stack
             # are not symbolic

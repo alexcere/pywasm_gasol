@@ -230,6 +230,10 @@ class Instruction:
     def __repr__(self):
         return f'{instruction.opcode[self.opcode][0]} {self.args}'
 
+    def __str__(self):
+        joined_args = f"[{','.join([str(arg) for arg in self.args])}]" if len(self.args) > 0 else ""
+        return f"{self.name}{joined_args}"
+
     @classmethod
     def from_reader(cls, r: typing.BinaryIO):
         o = Instruction()
