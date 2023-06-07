@@ -25,9 +25,11 @@ class Runtime:
         extern_value_list: typing.List[execution.ExternValue] = []
         for e in module.import_list:
             if e.module not in imps or e.name not in imps[e.module]:
-                raise Exception(f'pywasm: missing import {e.module}.{e.name}')
+                # Remove exception to allow not including imports. Only works with symbolic execution
+                pass
             if isinstance(e.desc, binary.TypeIndex):
-                a = execution.HostFunc(module.type_list[e.desc], imps[e.module][e.name])
+                # If we try to import a function not defined in imps, we just return the id function
+                a = execution.HostFunc(module.type_list[e.desc], imps.get(e.module, {e.name: lambda x: x})[e.name])
                 addr = self.machine.store.allocate_host_function(a)
                 extern_value_list.append(addr)
                 continue

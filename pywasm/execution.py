@@ -2289,16 +2289,18 @@ class Machine:
                 assert e < len(self.store.global_list)
 
         # If the number m of imports is not equal to the number n of provided external values, then fail
-        assert len(module.import_list) == len(extern_value_list)
+        # assert len(module.import_list) == len(extern_value_list)
 
         # For each external value and external type, do:
         # If externval is not valid with an external type in store S, then fail
         # If externtype does not match externtype, then fail
         for i, e in enumerate(extern_value_list):
             if isinstance(e, FunctionAddress):
-                a = self.store.function_list[e].type
-                b = module.type_list[module.import_list[i].desc]
-                assert match_function(a, b)
+                pass
+                # Avoid checking FunctionAddresses, as imports are not required
+                # a = self.store.function_list[e].type
+                # b = module.type_list[module.import_list[i].desc]
+                # assert match_function(a, b)
             if isinstance(e, TableAddress):
                 a = self.store.table_list[e].limits
                 b = module.import_list[i].desc.limits
