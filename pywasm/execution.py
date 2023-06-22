@@ -629,16 +629,24 @@ class AbstractConfiguration:
                 arity=len(function.type.rets.data),
             )
             self.set_frame(frame)
-            self.exec_symbolic()
+            self.exec_symbolic(function, function_args)
             return
         if isinstance(function, HostFunc):
             raise Exception(f'pywasm_gasol: host function not allowed to be executed')
         raise Exception(f'pywasm: unknown function type: {function}')
 
-    def exec_symbolic(self):
+    def exec_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value]):
 
         blocks = binary.Expression.blocks_from_instructions(self.frame.expr.data)
         for i, block in enumerate(blocks):
+            local_list = [Value.new(convention.symbolic, f"local_{i}") for i in range(len(function.code.local_list))]
+            frame = Frame(
+                module=function.module,
+                local_list=function_args + local_list,
+                expr=function.code.expr,
+                arity=len(function.type.rets.data),
+            )
+            self.set_frame(frame)
             print(f"Analyzing block {i}")
             self.exec_symbolic_block(block)
 
@@ -690,7 +698,7 @@ class AbstractConfiguration:
                 elif term.instr.name == "local.set":
                     values_args.add(current_arg)
 
-        if True:
+        if found:
 
             print("")
             print("Instructions:")
