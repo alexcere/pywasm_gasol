@@ -191,5 +191,5 @@ i64_reinterpret_f64 = op(0xbd, 'i64.reinterpret_f64', 1, 1, False, InstructionTy
 f32_reinterpret_i32 = op(0xbe, 'f32.reinterpret_i32', 1, 1, False, InstructionType.numeric)
 f64_reinterpret_i64 = op(0xbf, 'f64.reinterpret_i64', 1, 1, False, InstructionType.numeric)
 
-beginning_basic_block_instrs = [block, loop, if_, br, br_if, br_table, call_indirect]
+beginning_basic_block_instrs = [block, loop, if_, else_, br, br_if, br_table, call_indirect]
 end_basic_block_instrs = [end, unreachable, return_]
