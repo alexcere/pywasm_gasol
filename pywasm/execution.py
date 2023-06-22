@@ -146,8 +146,9 @@ class Term:
         self.ops: typing.List[typing.Union['Term', Value]] = operands
 
     def __str__(self):
+        args = f"[{','.join([str(arg_) for arg_ in self.instr.args])}]" if len(self.instr.args) > 0 else ""
         joined_operands = f"({','.join([str(op) for op in self.ops])})" if len(self.ops) > 0 else ""
-        return f"{self.instr}{joined_operands}"
+        return f"{self.instr}{args}{joined_operands}"
 
 
 class Result:
@@ -578,7 +579,8 @@ class AbstractConfiguration:
 
         # Change store global values by generic values
         # Non-mutable values remain the same as initially
-        symbolic_globals = [global_value if not global_value.mut else Value.new(convention.symbolic, f"global_{i}")
+        symbolic_globals = [global_value if not global_value.mut else
+                            GlobalInstance(Value.new(convention.symbolic, f"global_{i}"), global_value.mut)
                             for i, global_value in enumerate(self.store.global_list)]
         self.store.global_list = symbolic_globals
 
@@ -653,6 +655,12 @@ class AbstractConfiguration:
         print("Call access:")
         print('\n'.join([f'({idx}, {str(term)})' for idx, term in call_accesses]))
         print("")
+        print("Global access:")
+        print('\n'.join([f'({idx}, {str(global_instance.value)})' for idx, global_instance in enumerate(self.store.global_list)]))
+        print("")
+        print("Local access:")
+        print('\n'.join([f'({idx}, {str(local_instance)})' for idx, local_instance in enumerate(self.frame.local_list)]))
+        print("")
 
     def exec_symbolic_block(self, block: typing.List[binary.Instruction]):
         # Remove labels
@@ -682,7 +690,7 @@ class AbstractConfiguration:
                 elif term.instr.name == "local.set":
                     values_args.add(current_arg)
 
-        if found:
+        if True:
 
             print("")
             print("Instructions:")
@@ -726,6 +734,19 @@ def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> Term:
     return result
 
 
+def term_from_func(config: AbstractConfiguration, i: binary.Instruction) -> Term:
+    # First we remove from the stack the elements that have been consumed
+    operands = [elem for elem in config.stack.data[-1:-i.in_arity - 1:-1]]
+
+    # To have a canonical representation, we sort the args in comm operations
+    if i.comm:
+        operands = sorted(operands, key=lambda x: str(x))
+
+    result = Term(i, operands)
+    # Then we introduce the values in the stack
+    return result
+
+
 class ArithmeticLogicUnit:
 
     @staticmethod
@@ -763,7 +784,9 @@ class ArithmeticLogicUnit:
             #     call_accesses.append(f"{call_expr}_{idx}")
 
         elif i.type == instruction.InstructionType.variable:
-            var_expr = symbolic_func(config, i)
+            var_expr = term_from_func(config, i)
+            # Apply the symbolic function
+            func(config, i)
             var_accesses.append((idx, var_expr))
 
         elif i.type == instruction.InstructionType.memory:
@@ -772,7 +795,7 @@ class ArithmeticLogicUnit:
         else:
             # Either numeric or parametric instruction. We only try executing if all the values in the stack
             # are not symbolic
-            if any(val for val in config.stack.data[-1:-i.in_arity-1:-1]):
+            if any(val.type == convention.symbolic for val in config.stack.data[-1:-i.in_arity-1:-1]):
                 symbolic_func(config, i)
             else:
                 func(config, i)
@@ -1005,7 +1028,10 @@ class ArithmeticLogicUnit:
         r = config.frame.local_list[i.args[0]]
         o = Value()
         o.type = r.type
-        o.data = r.data.copy()
+        if o.type == convention.symbolic:
+            o.data = copy.deepcopy(r.data)
+        else:
+            o.data = r.data.copy()
         config.stack.append(o)
 
     @staticmethod
@@ -1018,7 +1044,10 @@ class ArithmeticLogicUnit:
         r = config.stack.data[-1]
         o = Value()
         o.type = r.type
-        o.data = r.data.copy()
+        if o.type == convention.symbolic:
+            o.data = copy.deepcopy(r.data)
+        else:
+            o.data = r.data.copy()
         config.frame.local_list[i.args[0]] = o
 
     @staticmethod
