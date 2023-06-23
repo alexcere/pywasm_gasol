@@ -26,7 +26,8 @@ class ValueType(int):
             convention.i64: 'i64',
             convention.f32: 'f32',
             convention.f64: 'f64',
-            convention.symbolic: 'sym'
+            convention.symbolic: 'sym',
+            convention.term: 'term'
         }[self]
 
     @classmethod
