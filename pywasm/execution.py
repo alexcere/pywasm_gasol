@@ -10,6 +10,7 @@ from . import log
 from . import num
 from . import option
 
+import sys
 # ======================================================================================================================
 # Execution Runtime Structure
 # ======================================================================================================================
@@ -19,7 +20,7 @@ class Value:
     # Values are represented by themselves.
     def __init__(self):
         self.type: binary.ValueType
-        self.data: bytearray = bytearray(8)
+        self.data: typing.Union[bytearray, num.sym, 'Term'] = bytearray(8)
 
     def __repr__(self):
         return f'{self.type} {self.val()}'
@@ -35,6 +36,7 @@ class Value:
             convention.f32: lambda x: Value.from_f32(num.f32(x)),
             convention.f64: lambda x: Value.from_f64(num.f64(x)),
             convention.symbolic: Value.from_symbolic,
+            convention.term: Value.from_term,
         }[type](data)
 
     @classmethod
@@ -51,6 +53,7 @@ class Value:
             convention.f32: self.f32,
             convention.f64: self.f64,
             convention.symbolic: self.sym,
+            convention.term: self.term,
         }[self.type]()
 
     def i32(self) -> num.i32:
@@ -72,6 +75,9 @@ class Value:
         return num.LittleEndian.f64(self.data[0:8])
 
     def sym(self) -> num.sym:
+        return self.data
+
+    def term(self) -> 'Term':
         return self.data
 
     @classmethod
@@ -137,18 +143,27 @@ class Value:
         o.data = n
         return o
 
+    @classmethod
+    def from_term(cls, t: 'Term'):
+        o = Value()
+        o.type = binary.ValueType(convention.term)
+        o.data = t
+        return o
+
 
 class Term:
     # A term consists of either a value or an instruction applied to other terms.
 
-    def __init__(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]]):
+    def __init__(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]], sub_index: typing.Optional[int] = None):
         self.instr: binary.Instruction = instr
         self.ops: typing.List[typing.Union['Term', Value]] = operands
+        self.sub_index: int = sub_index
 
     def __str__(self):
         args = f"[{','.join([str(arg_) for arg_ in self.instr.args])}]" if len(self.instr.args) > 0 else ""
         joined_operands = f"({','.join([str(op) for op in self.ops])})" if len(self.ops) > 0 else ""
-        return f"{self.instr}{args}{joined_operands}"
+        sub_index = f"_{self.sub_index}" if self.sub_index is not None else ""
+        return f"{self.instr}{args}{sub_index}{joined_operands}"
 
 
 class Result:
@@ -674,6 +689,9 @@ class AbstractConfiguration:
         # Remove labels
         basic_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                        instr.opcode not in instruction.end_basic_block_instrs]
+        # if len(basic_block) > 300:
+        #     print("Big!")
+        #     return
         self.initialize_block(basic_block)
 
         memory_accesses = []
@@ -733,12 +751,13 @@ def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> Term:
     result = Term(i, operands)
     ar = i.out_arity
     # Then we introduce the values in the stack
-    while ar > 0:
-        if i.out_arity > 1:
-            config.stack.append(Value.from_symbolic(f"{result}_{ar}"))
-        else:
-            config.stack.append(Value.from_symbolic(str(result)))
-        ar -= 1
+    # If ar > 1, then we create a term per introduced value in the stack
+    if i.out_arity > 1:
+        while ar > 0:
+            config.stack.append(Value.from_term(Term(i, operands, ar)))
+            ar -= 1
+    elif i.out_arity == 1:
+        config.stack.append(Value.from_term(result))
     return result
 
 
@@ -803,7 +822,7 @@ class ArithmeticLogicUnit:
         else:
             # Either numeric or parametric instruction. We only try executing if all the values in the stack
             # are not symbolic
-            if any(val.type == convention.symbolic for val in config.stack.data[-1:-i.in_arity-1:-1]):
+            if any(val.type == convention.symbolic or val.type == convention.term for val in config.stack.data[-1:-i.in_arity-1:-1]):
                 symbolic_func(config, i)
             else:
                 func(config, i)
@@ -958,7 +977,8 @@ class ArithmeticLogicUnit:
         new_instr = binary.Instruction()
 
         # We identify the instructions by its address
-        new_instr.opcode = function_addr
+        new_instr.opcode = 0x10
+        new_instr.name = f"call_{function_addr}"
         new_instr.args: typing.List[typing.Any] = []
         new_instr.type: instruction.InstructionType = instruction.InstructionType.control
         new_instr.in_arity: int = len(function_type.args.data)
@@ -1036,7 +1056,7 @@ class ArithmeticLogicUnit:
         r = config.frame.local_list[i.args[0]]
         o = Value()
         o.type = r.type
-        if o.type == convention.symbolic:
+        if o.type == convention.symbolic or o.type == convention.term:
             o.data = copy.deepcopy(r.data)
         else:
             o.data = r.data.copy()
@@ -1052,7 +1072,7 @@ class ArithmeticLogicUnit:
         r = config.stack.data[-1]
         o = Value()
         o.type = r.type
-        if o.type == convention.symbolic:
+        if o.type == convention.symbolic or o.type == convention.term:
             o.data = copy.deepcopy(r.data)
         else:
             o.data = r.data.copy()
