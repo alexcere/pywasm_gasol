@@ -1,3 +1,4 @@
+import collections
 import copy
 import typing
 
@@ -29,7 +30,7 @@ class Value:
         return f'{self.val()}'
 
     @classmethod
-    def new(cls, type: binary.ValueType, data: typing.Union[int, float, str]):
+    def new(cls, type: binary.ValueType, data: typing.Union[int, float, str, 'Term']):
         return {
             convention.i32: Value.from_i32,
             convention.i64: Value.from_i64,
@@ -55,6 +56,18 @@ class Value:
             convention.symbolic: self.sym,
             convention.term: self.term,
         }[self.type]()
+
+    def opcode(self):
+        op = self.data.instr.opcode if self.type == convention.term else None
+        return {
+            convention.i32: 0x41,
+            convention.i64: 0x42,
+            convention.f32: 0x43,
+            convention.f64: 0x44,
+            convention.symbolic: None,
+            convention.term: op,
+        }[self.type]
+
 
     def i32(self) -> num.i32:
         return num.LittleEndian.i32(self.data[0:4])
@@ -704,6 +717,10 @@ class AbstractConfiguration:
                            copy.deepcopy(var_accesses), copy.deepcopy(call_accesses)])
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
+        current_ops = {}
+        new_index_per_instr = collections.defaultdict(lambda: 0)
+        print(operands_from_stack(self.stack, current_ops, new_index_per_instr))
+
         values_args = set()
         found = False
         for idx, term in var_accesses:
@@ -772,6 +789,75 @@ def term_from_func(config: AbstractConfiguration, i: binary.Instruction) -> Term
     result = Term(i, operands)
     # Then we introduce the values in the stack
     return result
+
+
+def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict) -> str:
+    # First we obtain the stack vars associated to all input values
+    input_values = [operands_from_value(input_term, current_ops, new_index_per_instr) for input_term in term.ops]
+    opcode_name = term.instr.name
+    term_var = f"s({sum(new_index_per_instr.values())})"
+    term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "opcode": opcode_name,
+                 "disasm": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
+                 "outpt_sk": [] if term.instr.out_arity == 0 else [term_var], "commutative": term.instr.comm,
+                 'storage': term.instr.out_arity == 0}
+    current_ops[str(term)] = term_info
+    new_index_per_instr[opcode_name] += 1
+    return term_var
+
+
+def introduce_variable(variable: str, current_ops: typing.Dict, new_index_per_instr: typing.Dict) -> str:
+    var_name, _ = variable.split("_")
+    opcode = 0x23 if var_name == "global" else 0x20
+    opcode_info = instruction.opcode_info[opcode]
+    opcode_name = opcode_info["name"]
+    term_var = f"s({sum(new_index_per_instr.values())})"
+    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "opcode": opcode_name,
+                 "disasm": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
+                 "commutative": False, 'storage': False}
+    current_ops[variable] = term_info
+    new_index_per_instr[opcode_name] += 1
+    return term_var
+
+
+def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_instr: typing.Dict, constant) -> str:
+    opcode_info = instruction.opcode_info[opcode]
+    term_var = f"s({sum(new_index_per_instr.values())})"
+    term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "opcode": opcode_info["name"],
+                 "disasm": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
+                 "commutative": False, 'storage': False}
+    current_ops[str(constant)] = term_info
+    new_index_per_instr['PUSH'] += 1
+    return term_var
+
+
+def operands_from_value(val: Value, current_ops: typing.Dict, new_index_per_instr: typing.Dict):
+    value = val.val()
+    if str(value) in current_ops:
+        return current_ops[value]
+    else:
+        if val.type == convention.term:
+            return introduce_term(value, current_ops, new_index_per_instr)
+        elif val.type == convention.symbolic:
+            return introduce_variable(value, current_ops, new_index_per_instr)
+        else:
+            opcode = val.opcode()
+            return introduce_constant(opcode, current_ops, new_index_per_instr, value)
+
+
+def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_instr: typing.Dict):
+    symbolic_stack = []
+    for val in stack.data[::-1]:
+        stack_term = operands_from_value(val, current_ops, new_index_per_instr)
+        symbolic_stack.append(stack_term)
+    return symbolic_stack, current_ops
+
+
+def operands_from_mem_accesses(initial_mem_state, final_mem_state):
+    pass
+
+
+def operands_from_var_accesses(initial__accesses, final_mem_accesses):
+    pass
 
 
 class ArithmeticLogicUnit:
