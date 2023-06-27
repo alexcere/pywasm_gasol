@@ -722,8 +722,8 @@ class AbstractConfiguration:
         current_ops = {}
         new_index_per_instr = collections.defaultdict(lambda: 0)
         print("Stack",operands_from_stack(self.stack, current_ops, new_index_per_instr, initial_stack))
-        print("Var accesses", deps_from_var_accesses(var_accesses))
-        print("Mem accesses", deps_from_mem_accesses(memory_accesses))
+        # print("Var accesses", deps_from_var_accesses(var_accesses, current_ops))
+        # print("Mem accesses", deps_from_mem_accesses(memory_accesses, current_ops))
 
 
         values_args = set()
@@ -896,6 +896,10 @@ def overlap_address(add1: int, off1: int, add2: int, off2: int) -> bool:
 def are_dependent_mem_access(mem_access1: Term, mem_access2: Term):
     if "load" in mem_access1.instr.name and "load" in mem_access2.instr.name:
         return False
+    # We don't know if call instructions are modifying the memory,
+    # so we assume it is dependent with the remaining instructions
+    elif "call" in mem_access1.instr.name or "call" in mem_access2.instr.name:
+        return True
     elif "grow" in mem_access1.instr.name or "grow" in mem_access2.instr.name:
         # We assume growing the memory is dependent with the remaining instructions
         return True
@@ -928,18 +932,18 @@ def simplify_dependencies(deps: typing.List[typing.Tuple[int, int]]) -> typing.L
     return list(tr.edges)
 
 
-def deps_from_var_accesses(var_accesses: typing.List[typing.Tuple[int, Term]]) -> typing.List[typing.Tuple[str, str]]:
+def deps_from_var_accesses(var_accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict) -> typing.List[typing.Tuple[str, str]]:
     dependencies = [(i, j+i+1) for i, (_, var_access1) in enumerate(var_accesses)
                     for j, (_, var_access2) in enumerate(var_accesses[i+1:])
                     if are_dependent_var_access(var_access1, var_access2)]
-    return [(str(var_accesses[i][1].instr), str(var_accesses[j][1].instr)) for i, j in simplify_dependencies(dependencies)]
+    return [(current_ops[str(var_accesses[i][1])]['id'], current_ops[str(var_accesses[j][1])]['id']) for i, j in simplify_dependencies(dependencies)]
 
 
-def deps_from_mem_accesses(mem_accesses: typing.List[typing.Tuple[int, Term]]) -> typing.List[typing.Tuple[str, str]]:
+def deps_from_mem_accesses(mem_accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict) -> typing.List[typing.Tuple[str, str]]:
     dependencies = [(i, j+i+1) for i, (_, mem_access1) in enumerate(mem_accesses)
                     for j, (_, mem_access2) in enumerate(mem_accesses[i+1:])
                     if are_dependent_mem_access(mem_access1, mem_access2)]
-    return [(str(mem_accesses[i][1].instr), str(mem_accesses[j][1].instr)) for i, j in simplify_dependencies(dependencies)]
+    return [(current_ops[str(mem_accesses[i][1])]['id'], current_ops[str(mem_accesses[j][1])]['id']) for i, j in simplify_dependencies(dependencies)]
 
 
 def initial_length(instrs: typing.List[binary.Instruction]):
@@ -957,7 +961,9 @@ def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_a
     new_index_per_instr = collections.defaultdict(lambda: 0)
     tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack)
     operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack)
-    mem_deps = deps_from_mem_accesses(memory_accesses)
+    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack)
+    combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
+    mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
     b0 = initial_length(instrs)
     bs = max_sk_sz(instrs)
     sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': [],
