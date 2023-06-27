@@ -713,12 +713,14 @@ class AbstractConfiguration:
         call_accesses = []
         states = []
         initial_stack = [str(elem) for elem in self.stack.data[::-1]]
+        initial_locals = copy.deepcopy(self.frame.local_list)
 
         for i, instr in enumerate(basic_block):
             states.append([i, instr, copy.deepcopy(self.stack), copy.deepcopy(memory_accesses),
                            copy.deepcopy(var_accesses), copy.deepcopy(call_accesses)])
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
+        final_locals = copy.deepcopy(self.frame.local_list)
         current_ops = {}
         new_index_per_instr = collections.defaultdict(lambda: 0)
         print("Stack",operands_from_stack(self.stack, current_ops, new_index_per_instr, initial_stack))
@@ -747,7 +749,7 @@ class AbstractConfiguration:
             print("")
             with open('prueba.json', 'w') as f:
                 json.dump(sfs_from_state(initial_stack, self.stack, memory_accesses, var_accesses,
-                                         call_accesses, basic_block), f)
+                                         call_accesses, basic_block, initial_locals, final_locals), f)
 
             # for state in states:
             #     i, instr, stack, m_accesses, v_accesses, c_accesses = state
@@ -946,6 +948,12 @@ def deps_from_mem_accesses(mem_accesses: typing.List[typing.Tuple[int, Term]], c
     return [(current_ops[str(mem_accesses[i][1])]['id'], current_ops[str(mem_accesses[j][1])]['id']) for i, j in simplify_dependencies(dependencies)]
 
 
+def state_from_local_variables(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict):
+    modified_locals = [(str(ini_local), current_ops[str(final_local)]['outpt_sk'][0]) for ini_local, final_local in zip(initial_locals, final_locals)
+                       if str(ini_local) != str(final_local)]
+    return modified_locals
+
+
 def initial_length(instrs: typing.List[binary.Instruction]):
     return len(instrs)
 
@@ -956,7 +964,8 @@ def max_sk_sz(instrs: typing.List[binary.Instruction]):
 
 def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_accesses: typing.List[typing.Tuple[int, Term]],
                    var_accesses: typing.List[typing.Tuple[int, Term]],
-                   call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction]) -> typing.Dict:
+                   call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction],
+                   initial_locals: typing.List[Value], final_locals: typing.List[Value]) -> typing.Dict:
     current_ops = {}
     new_index_per_instr = collections.defaultdict(lambda: 0)
     tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack)
@@ -964,11 +973,13 @@ def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_a
     operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack)
     combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
     mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
+    local_changes = state_from_local_variables(initial_locals, final_locals, current_ops)
     b0 = initial_length(instrs)
     bs = max_sk_sz(instrs)
     sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': [],
            "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()), 'memory_dependences': mem_deps,
-           'is_revert': False, 'rules_applied': False, 'rules': [], 'original_instrs': ' '.join((str(instr) for instr in instrs))}
+           'is_revert': False, 'rules_applied': False, 'rules': [], 'original_instrs': ' '.join((str(instr) for instr in instrs)),
+           'local_changes': local_changes}
 
     return sfs
 
