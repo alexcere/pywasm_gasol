@@ -3,6 +3,7 @@ import copy
 import typing
 
 import numpy
+import networkx as nx
 
 from . import binary
 from . import convention
@@ -173,10 +174,9 @@ class Term:
         self.sub_index: int = sub_index
 
     def __str__(self):
-        args = f"[{','.join([str(arg_) for arg_ in self.instr.args])}]" if len(self.instr.args) > 0 else ""
         joined_operands = f"({','.join([str(op) for op in self.ops])})" if len(self.ops) > 0 else ""
         sub_index = f"_{self.sub_index}" if self.sub_index is not None else ""
-        return f"{self.instr}{args}{sub_index}{joined_operands}"
+        return f"{self.instr}{sub_index}{joined_operands}"
 
 
 class Result:
@@ -719,7 +719,10 @@ class AbstractConfiguration:
 
         current_ops = {}
         new_index_per_instr = collections.defaultdict(lambda: 0)
-        print(operands_from_stack(self.stack, current_ops, new_index_per_instr))
+        print("Stack",operands_from_stack(self.stack, current_ops, new_index_per_instr))
+        print("Var accesses", operands_from_var_accesses(var_accesses))
+        print("Mem accesses", operands_from_mem_accesses(memory_accesses))
+
 
         values_args = set()
         found = False
@@ -852,12 +855,76 @@ def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_in
     return symbolic_stack, current_ops
 
 
-def operands_from_mem_accesses(initial_mem_state, final_mem_state):
-    pass
+def mem_access_range(mem_access: Term):
+    effective_address = mem_access.ops[0].val() + mem_access.instr.args[0] if mem_access.ops[0].type != convention.term and mem_access.ops[0].type != convention.symbolic else (mem_access.ops[0].val(), mem_access.instr.args[0])
+    instr_name = mem_access.instr.name
+    if instr_name == "i32.load8_s" or instr_name == "i32.load8_u" or instr_name == "i64.load8_s" or instr_name == "i64.load8_u"\
+            or instr_name == "i32.store8" or instr_name == "i64.store8":
+        offset = 1
+    elif instr_name == "i32.load16_s" or instr_name == "i32.load16_u" or instr_name == "i64.load16_s" or instr_name == "i64.load16_u" \
+            or instr_name == "i32.store16" or instr_name == "i64.store16":
+        offset = 2
+    elif instr_name == "i32.load" or instr_name == "f32.load" or instr_name == "i64.load32_s" or instr_name == "i64.load32_u" \
+            or instr_name == "i32.store" or instr_name == "f32.store" or instr_name == "i64.store32":
+        offset = 4
+    elif instr_name == "i64.load" or instr_name == "f64.load" or instr_name == "i64.store" or instr_name == "f64.store":
+        offset = 8
+    else:
+        raise ValueError(f"{instr_name} not recognized in mem_access_range")
+    return [effective_address, offset]
 
 
-def operands_from_var_accesses(initial__accesses, final_mem_accesses):
-    pass
+def overlap_address(add1: int, off1: int, add2: int, off2: int) -> bool:
+    return add1 <= add2 < add1 + off1 or add2 <= add1 < add2 + off2
+
+
+def are_dependent_mem_access(mem_access1: Term, mem_access2: Term):
+    if "load" in mem_access1.instr.name and "load" in mem_access2.instr.name:
+        return False
+    elif "grow" in mem_access1.instr.name or "grow" in mem_access2.instr.name:
+        # We assume growing the memory is dependent with the remaining instructions
+        return True
+    elif "size" in mem_access1.instr.name or "size" in mem_access2.instr.name:
+        # As neither instruction can be "grow", size is not dependent with any other instruction
+        return False
+
+    effective1, offset1 = mem_access_range(mem_access1)
+    effective2, offset2 = mem_access_range(mem_access2)
+
+    if type(effective1) == int and type(effective2) == int:
+        return overlap_address(effective1, offset1, effective2, offset2)
+    elif type(effective1) == tuple and type(effective2) == tuple:
+        # As they share the same symbolic value, we don't care the exact address
+        if effective1[0] == effective2[0]:
+            return overlap_address(effective1[1], offset1, effective2[1], offset2)
+
+    # One constant and one symbolic access are assumed to be dependent
+    return True
+
+
+def are_dependent_var_access(var_access1: Term, var_access2: Term):
+    return ("get" not in var_access1.instr.name or "get" not in var_access2.instr.name) \
+        and var_access1.instr.args[0] == var_access2.instr.args[0]
+
+
+def simplify_dependencies(deps: typing.List[typing.Tuple[int, int]]) -> typing.List[typing.Tuple[int, int]]:
+    dg = nx.DiGraph(deps)
+    tr = nx.transitive_reduction(dg)
+    return list(tr.edges)
+
+
+def operands_from_var_accesses(var_accesses: typing.List[typing.Tuple[int, Term]]) -> typing.List[typing.Tuple[str, str]]:
+    dependencies = [(i, j+i+1) for i, (_, var_access1) in enumerate(var_accesses)
+                    for j, (_, var_access2) in enumerate(var_accesses[i+1:])
+                    if are_dependent_var_access(var_access1, var_access2)]
+    return [(str(var_accesses[i][1]), str(var_accesses[j][1])) for i, j in simplify_dependencies(dependencies)]
+
+
+def operands_from_mem_accesses(var_accesses: typing.List[typing.Tuple[int, Term]]) -> typing.List[typing.Tuple[str, str]]:
+    dependencies = [(i, j+i+1) for i, (_, var_access1) in enumerate(var_accesses)
+                    for j, (_, var_access2) in enumerate(var_accesses[i+1:])
+                    if are_dependent_mem_access(var_access1, var_access2)]
+    return [(str(var_accesses[i][1]), str(var_accesses[j][1])) for i, j in simplify_dependencies(dependencies)]
 
 
 class ArithmeticLogicUnit:
