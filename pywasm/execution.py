@@ -1,5 +1,6 @@
 import collections
 import copy
+import json
 import typing
 
 import numpy
@@ -616,7 +617,7 @@ class AbstractConfiguration:
     def initialize_stack(self, block: typing.List[binary.Instruction]):
         stack_size = self.init_stack_size(block)
         stack = Stack()
-        initial_values = [Value.new(convention.symbolic, f"s_{i}") for i in range(stack_size)]
+        initial_values = [Value.new(convention.symbolic, f"in({i})") for i in range(stack_size)]
         for val in initial_values:
             stack.append(val)
         self.stack = stack
@@ -711,6 +712,7 @@ class AbstractConfiguration:
         var_accesses = []
         call_accesses = []
         states = []
+        initial_stack = [str(elem) for elem in self.stack.data[::-1]]
 
         for i, instr in enumerate(basic_block):
             states.append([i, instr, copy.deepcopy(self.stack), copy.deepcopy(memory_accesses),
@@ -719,9 +721,9 @@ class AbstractConfiguration:
 
         current_ops = {}
         new_index_per_instr = collections.defaultdict(lambda: 0)
-        print("Stack",operands_from_stack(self.stack, current_ops, new_index_per_instr))
-        print("Var accesses", operands_from_var_accesses(var_accesses))
-        print("Mem accesses", operands_from_mem_accesses(memory_accesses))
+        print("Stack",operands_from_stack(self.stack, current_ops, new_index_per_instr, initial_stack))
+        print("Var accesses", deps_from_var_accesses(var_accesses))
+        print("Mem accesses", deps_from_mem_accesses(memory_accesses))
 
 
         values_args = set()
@@ -743,6 +745,9 @@ class AbstractConfiguration:
             print('\n'.join([str(i) for i in basic_block]))
             print("")
             print("")
+            with open('prueba.json', 'w') as f:
+                json.dump(sfs_from_state(initial_stack, self.stack, memory_accesses, var_accesses,
+                                         call_accesses, basic_block), f)
 
             # for state in states:
             #     i, instr, stack, m_accesses, v_accesses, c_accesses = state
@@ -794,12 +799,12 @@ def term_from_func(config: AbstractConfiguration, i: binary.Instruction) -> Term
     return result
 
 
-def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict) -> str:
+def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str]) -> str:
     # First we obtain the stack vars associated to all input values
-    input_values = [operands_from_value(input_term, current_ops, new_index_per_instr) for input_term in term.ops]
+    input_values = [operands_from_value(input_term, current_ops, new_index_per_instr, initial_stack) for input_term in term.ops]
     opcode_name = term.instr.name
     term_var = f"s({sum(new_index_per_instr.values())})"
-    term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "opcode": opcode_name,
+    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "opcode": opcode_name,
                  "disasm": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": [] if term.instr.out_arity == 0 else [term_var], "commutative": term.instr.comm,
                  'storage': term.instr.out_arity == 0}
@@ -827,19 +832,23 @@ def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_inst
     term_var = f"s({sum(new_index_per_instr.values())})"
     term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "opcode": opcode_info["name"],
                  "disasm": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
-                 "commutative": False, 'storage': False}
+                 "commutative": False, 'storage': False, 'value': constant}
     current_ops[str(constant)] = term_info
     new_index_per_instr['PUSH'] += 1
     return term_var
 
 
-def operands_from_value(val: Value, current_ops: typing.Dict, new_index_per_instr: typing.Dict):
+def operands_from_value(val: Value, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
+                        initial_stack: typing.List[str]):
     value = val.val()
-    if str(value) in current_ops:
-        return current_ops[value]
+    value_rep = str(value)
+    if value_rep in initial_stack:
+        return value_rep
+    elif value_rep in current_ops:
+        return current_ops[value_rep]['outpt_sk'][0]
     else:
         if val.type == convention.term:
-            return introduce_term(value, current_ops, new_index_per_instr)
+            return introduce_term(value, current_ops, new_index_per_instr, initial_stack)
         elif val.type == convention.symbolic:
             return introduce_variable(value, current_ops, new_index_per_instr)
         else:
@@ -847,12 +856,18 @@ def operands_from_value(val: Value, current_ops: typing.Dict, new_index_per_inst
             return introduce_constant(opcode, current_ops, new_index_per_instr, value)
 
 
-def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_instr: typing.Dict):
+def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str]):
     symbolic_stack = []
     for val in stack.data[::-1]:
-        stack_term = operands_from_value(val, current_ops, new_index_per_instr)
+        stack_term = operands_from_value(val, current_ops, new_index_per_instr, initial_stack)
         symbolic_stack.append(stack_term)
-    return symbolic_stack, current_ops
+    return symbolic_stack
+
+
+def operands_from_accesses(accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict,
+                           new_index_per_instr: typing.Dict, initial_stack: typing.List[str]):
+    for _, val in accesses:
+        operands_from_value(Value.from_term(val), current_ops, new_index_per_instr, initial_stack)
 
 
 def mem_access_range(mem_access: Term):
@@ -913,18 +928,43 @@ def simplify_dependencies(deps: typing.List[typing.Tuple[int, int]]) -> typing.L
     return list(tr.edges)
 
 
-def operands_from_var_accesses(var_accesses: typing.List[typing.Tuple[int, Term]]) -> typing.List[typing.Tuple[str, str]]:
+def deps_from_var_accesses(var_accesses: typing.List[typing.Tuple[int, Term]]) -> typing.List[typing.Tuple[str, str]]:
     dependencies = [(i, j+i+1) for i, (_, var_access1) in enumerate(var_accesses)
                     for j, (_, var_access2) in enumerate(var_accesses[i+1:])
                     if are_dependent_var_access(var_access1, var_access2)]
-    return [(str(var_accesses[i][1]), str(var_accesses[j][1])) for i, j in simplify_dependencies(dependencies)]
+    return [(str(var_accesses[i][1].instr), str(var_accesses[j][1].instr)) for i, j in simplify_dependencies(dependencies)]
 
 
-def operands_from_mem_accesses(var_accesses: typing.List[typing.Tuple[int, Term]]) -> typing.List[typing.Tuple[str, str]]:
-    dependencies = [(i, j+i+1) for i, (_, var_access1) in enumerate(var_accesses)
-                    for j, (_, var_access2) in enumerate(var_accesses[i+1:])
-                    if are_dependent_mem_access(var_access1, var_access2)]
-    return [(str(var_accesses[i][1]), str(var_accesses[j][1])) for i, j in simplify_dependencies(dependencies)]
+def deps_from_mem_accesses(mem_accesses: typing.List[typing.Tuple[int, Term]]) -> typing.List[typing.Tuple[str, str]]:
+    dependencies = [(i, j+i+1) for i, (_, mem_access1) in enumerate(mem_accesses)
+                    for j, (_, mem_access2) in enumerate(mem_accesses[i+1:])
+                    if are_dependent_mem_access(mem_access1, mem_access2)]
+    return [(str(mem_accesses[i][1].instr), str(mem_accesses[j][1].instr)) for i, j in simplify_dependencies(dependencies)]
+
+
+def initial_length(instrs: typing.List[binary.Instruction]):
+    return len(instrs)
+
+
+def max_sk_sz(instrs: typing.List[binary.Instruction]):
+    return 10
+
+
+def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_accesses: typing.List[typing.Tuple[int, Term]],
+                   var_accesses: typing.List[typing.Tuple[int, Term]],
+                   call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction]) -> typing.Dict:
+    current_ops = {}
+    new_index_per_instr = collections.defaultdict(lambda: 0)
+    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack)
+    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack)
+    mem_deps = deps_from_mem_accesses(memory_accesses)
+    b0 = initial_length(instrs)
+    bs = max_sk_sz(instrs)
+    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': [],
+           "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()), 'memory_dependences': mem_deps,
+           'is_revert': False, 'rules_applied': False, 'rules': [], 'original_instrs': ' '.join((str(instr) for instr in instrs))}
+
+    return sfs
 
 
 class ArithmeticLogicUnit:
