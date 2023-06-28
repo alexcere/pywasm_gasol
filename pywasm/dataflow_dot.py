@@ -1,0 +1,65 @@
+import typing
+
+
+def add_node(term: str, term_to_id: typing.Dict, color: str, f):
+    new_idx = len(term_to_id)
+    f.write(f"n_{new_idx} [color={color},label=\"{term}\"];\n")
+    term_to_id[term] = new_idx
+
+
+def add_edge(term1: str, term2: str, term_to_id: typing.Dict, label: str, f):
+    f.write(f"n_{term_to_id[term1]} -> n_{term_to_id[term2]} [label=\"{label}\"];\n")
+
+
+def add_consecutive_term(terms: typing.List[str], term_to_id: typing.Dict, label:str, f):
+    for i in range(len(terms) - 1):
+        add_edge(terms[i], terms[i+1], term_to_id, label, f)
+
+
+def dot_for_term(term: str, user_instr: typing.List[typing.Dict], term_to_id: typing.Dict,
+                 stack_var_to_id: typing.Dict, label: str, f):
+    if term in term_to_id:
+        return
+    filtered_instr = [instr for instr in user_instr if instr["id"] == term]
+    current_instr = filtered_instr[0] if len(filtered_instr) > 0 else None
+    if current_instr is None:
+        add_node(term, term_to_id, "red" if label == "init_stack" else "blue", f)
+    else:
+        add_node(term, term_to_id, "blue" if label == "final_stack" else "purple" if label == "store" else "green", f)
+
+        children = [stack_var_to_id[child] for child in current_instr['inpt_sk']]
+        for child in children:
+            dot_for_term(child, user_instr, term_to_id, stack_var_to_id, "child", f)
+            add_edge(term, child, term_to_id, "child", f)
+
+        # If the instruction is not commutative, add a edge to represent the fixed order among elements
+        if not current_instr["commutative"]:
+            add_consecutive_term(children, term_to_id, "not_comm", f)
+
+
+# Given the blocks corresponding to the CFG of a program, and the string containing the input program,
+# generates a graphical representation of the CFG as a .dot file.
+def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name: str = "cfg.dot"):
+    with open(dot_file_name, 'w') as f:
+        f.write("digraph G {\n")
+        final_stack = sfs_json["tgt_ws"]
+        initial_stack = sfs_json["src_ws"]
+        user_instrs = sfs_json["user_instrs"]
+        local_changes = sfs_json["local_changes"]
+
+        stack_var_to_id = {instr['outpt_sk'][0]: instr['id'] for instr in user_instrs if len(instr['outpt_sk']) == 1}
+        term_to_id = {}
+        for term in initial_stack:
+            dot_for_term(term, user_instrs, term_to_id, stack_var_to_id, "init_stack", f)
+        for term in final_stack:
+            dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, "final_stack", f)
+
+        store_instrs = [instr for instr in user_instrs if instr['storage']]
+        for store_instr in store_instrs:
+            dot_for_term(store_instr['id'], user_instrs, term_to_id, stack_var_to_id, "store", f)
+
+        for _, term in local_changes:
+            dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, "local", f)
+
+        f.write("}\n")
+

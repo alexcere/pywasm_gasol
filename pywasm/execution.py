@@ -12,6 +12,7 @@ from . import instruction
 from . import log
 from . import num
 from . import option
+from . import dataflow_dot
 
 import sys
 # ======================================================================================================================
@@ -748,8 +749,10 @@ class AbstractConfiguration:
             print("")
             print("")
             with open('prueba.json', 'w') as f:
-                json.dump(sfs_from_state(initial_stack, self.stack, memory_accesses, var_accesses,
-                                         call_accesses, basic_block, initial_locals, final_locals), f)
+                sfs_json = sfs_from_state(initial_stack, self.stack, memory_accesses, var_accesses,
+                                          call_accesses, basic_block, initial_locals, final_locals)
+                json.dump(sfs_json, f)
+                dataflow_dot.generate_CFG_dot(sfs_json)
 
             # for state in states:
             #     i, instr, stack, m_accesses, v_accesses, c_accesses = state
