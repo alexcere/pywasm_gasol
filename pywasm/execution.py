@@ -957,6 +957,12 @@ def state_from_local_variables(initial_locals: typing.List[Value], final_locals:
     return modified_locals
 
 
+def deps_from_modified_locals(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict):
+    return [(current_ops[str(ini_local)]['id'], current_ops[str(final_local)]['id'])
+            for ini_local, final_local in zip(initial_locals, final_locals)
+            if str(ini_local) != str(final_local) and str(ini_local) in current_ops]
+
+
 def initial_length(instrs: typing.List[binary.Instruction]):
     return len(instrs)
 
@@ -979,9 +985,11 @@ def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_a
     combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
     mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
     local_changes = state_from_local_variables(initial_locals, final_locals, current_ops)
+    local_deps = deps_from_modified_locals(initial_locals, final_locals, current_ops)
+    print("local deps", local_deps)
     b0 = initial_length(instrs)
     bs = max_sk_sz
-    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': [],
+    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': [], 'local_dependences': local_deps,
            "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()), 'memory_dependences': mem_deps,
            'is_revert': False, 'rules_applied': False, 'rules': [], 'original_instrs': ' '.join((str(instr) for instr in instrs)),
            'local_changes': local_changes}

@@ -47,6 +47,7 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name: str = "cfg.dot"):
         user_instrs = sfs_json["user_instrs"]
         local_changes = sfs_json["local_changes"]
         mem_deps = sfs_json["memory_dependences"]
+        local_deps = sfs_json["local_dependences"]
 
         stack_var_to_id = {instr['outpt_sk'][0]: instr['id'] for instr in user_instrs if len(instr['outpt_sk']) == 1}
         term_to_id = {}
@@ -63,13 +64,18 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name: str = "cfg.dot"):
             dot_for_term(store_instr['id'], user_instrs, term_to_id, stack_var_to_id, f)
 
         for local, term in local_changes:
-            add_node(local, term_to_id, "orange", f)
-            add_node(stack_var_to_id[term], term_to_id, "orange", f)
+            if local not in term_to_id:
+                dot_for_term(local, user_instrs, term_to_id, stack_var_to_id, f)
+            if stack_var_to_id[term] not in term_to_id:
+                dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
             add_edge(local, stack_var_to_id[term], term_to_id, "in", f)
             dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
 
         for acc1, acc2 in mem_deps:
             add_edge(acc2, acc1, term_to_id, "dep", f)
+
+        for acc1, acc2 in local_deps:
+            add_edge(acc2, acc1, term_to_id, "loc_dep", f)
 
         f.write("}\n")
 
