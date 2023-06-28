@@ -905,11 +905,17 @@ def tee_instruction(arg_num: int):
 def tee_set_dependences(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict,
                         new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
                         repeated_values: typing.Set[str]):
+    deps = []
     for i, (ini_local, final_local) in enumerate(zip(initial_locals, final_locals)):
         if str(ini_local) != str(final_local):
             # Include set instruction (always possible)
             set_value = Value.from_term(Term(set_instruction(i), [final_local]))
             operands_from_value(set_value, current_ops, new_index_per_instr, initial_stack, repeated_values)
+            set_instr = current_ops[str(set_value)]
+
+            # Finally, if the initial value in the variables is accessed, we add a dependency among the instructions
+            if str(ini_local) in current_ops:
+                deps.append((current_ops[str(ini_local)]['id'], set_instr['id']))
 
             if str(final_local) in repeated_values:
                 tee_value = Value.from_term(Term(tee_instruction(i), [final_local]))
@@ -917,11 +923,14 @@ def tee_set_dependences(initial_locals: typing.List[Value], final_locals: typing
                                     repeated_values)
 
                 # Annotate that both instructions are related
-                set_instr = current_ops[str(set_value)]
                 tee_instr = current_ops[str(tee_value)]
                 set_instr["alternative"] = tee_instr['id']
                 tee_instr["alternative"] = set_instr['id']
 
+                # Same as before for tee
+                if str(ini_local) in current_ops:
+                    deps.append((current_ops[str(ini_local)]['id'], tee_instr['id']))
+    return deps
 
 def mem_access_range(mem_access: Term):
     effective_address = mem_access.ops[0].val() + mem_access.instr.args[0] if mem_access.ops[0].type != convention.term and mem_access.ops[0].type != convention.symbolic else (mem_access.ops[0].val(), mem_access.instr.args[0])
@@ -1025,12 +1034,12 @@ def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_a
     tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, repeated_values)
     operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values)
     operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values)
-    tee_set_dependences(initial_locals, final_locals, current_ops, new_index_per_instr, initial_stack, repeated_values)
+    local_deps = tee_set_dependences(initial_locals, final_locals, current_ops, new_index_per_instr, initial_stack, repeated_values)
 
     combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
     mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
     local_changes = state_from_local_variables(initial_locals, final_locals, current_ops)
-    local_deps = deps_from_modified_locals(initial_locals, final_locals, current_ops)
+    # local_deps = deps_from_modified_locals(initial_locals, final_locals, current_ops)
     print("local deps", local_deps)
     b0 = initial_length(instrs)
     bs = max_sk_sz
