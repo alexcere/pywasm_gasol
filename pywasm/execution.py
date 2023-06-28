@@ -728,7 +728,7 @@ class AbstractConfiguration:
         final_locals = copy.deepcopy(self.frame.local_list)
         current_ops = {}
         new_index_per_instr = collections.defaultdict(lambda: 0)
-        print("Stack",operands_from_stack(self.stack, current_ops, new_index_per_instr, initial_stack))
+        # print("Stack",operands_from_stack(self.stack, current_ops, new_index_per_instr, initial_stack))
         # print("Var accesses", deps_from_var_accesses(var_accesses, current_ops))
         # print("Mem accesses", deps_from_mem_accesses(memory_accesses, current_ops))
 
@@ -804,9 +804,10 @@ def term_from_func(config: AbstractConfiguration, i: binary.Instruction) -> Term
     return result
 
 
-def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str]) -> str:
+def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
+                   repeated_values: typing.Set[str]) -> str:
     # First we obtain the stack vars associated to all input values
-    input_values = [operands_from_value(input_term, current_ops, new_index_per_instr, initial_stack) for input_term in term.ops]
+    input_values = [operands_from_value(input_term, current_ops, new_index_per_instr, initial_stack, repeated_values) for input_term in term.ops]
     opcode_name = term.instr.name
     term_var = f"s({sum(new_index_per_instr.values())})"
     term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "opcode": opcode_name,
@@ -844,16 +845,17 @@ def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_inst
 
 
 def operands_from_value(val: Value, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
-                        initial_stack: typing.List[str]):
+                        initial_stack: typing.List[str], repeated_values: typing.Set[str]):
     value = val.val()
     value_rep = str(value)
     if value_rep in initial_stack:
         return value_rep
     elif value_rep in current_ops:
+        repeated_values.add(value_rep)
         return current_ops[value_rep]['outpt_sk'][0]
     else:
         if val.type == convention.term:
-            return introduce_term(value, current_ops, new_index_per_instr, initial_stack)
+            return introduce_term(value, current_ops, new_index_per_instr, initial_stack, repeated_values)
         elif val.type == convention.symbolic:
             return introduce_variable(value, current_ops, new_index_per_instr)
         else:
@@ -861,18 +863,64 @@ def operands_from_value(val: Value, current_ops: typing.Dict, new_index_per_inst
             return introduce_constant(opcode, current_ops, new_index_per_instr, value)
 
 
-def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str]):
+def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str], repeated_values: typing.Set[str]):
     symbolic_stack = []
     for val in stack.data[::-1]:
-        stack_term = operands_from_value(val, current_ops, new_index_per_instr, initial_stack)
+        stack_term = operands_from_value(val, current_ops, new_index_per_instr, initial_stack, repeated_values)
         symbolic_stack.append(stack_term)
     return symbolic_stack
 
 
 def operands_from_accesses(accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict,
-                           new_index_per_instr: typing.Dict, initial_stack: typing.List[str]):
+                           new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
+                           repeated_values: typing.Set[str]):
     for _, val in accesses:
-        operands_from_value(Value.from_term(val), current_ops, new_index_per_instr, initial_stack)
+        operands_from_value(Value.from_term(val), current_ops, new_index_per_instr, initial_stack, repeated_values)
+
+
+def set_instruction(arg_num: int):
+    o = binary.Instruction()
+    o.opcode = 0x21
+    o.name = instruction.opcode_info[o.opcode]["name"]
+    o.type = instruction.opcode_info[o.opcode]["type"]
+    o.in_arity = instruction.opcode_info[o.opcode]["in_ar"]
+    o.out_arity = instruction.opcode_info[o.opcode]["out_ar"]
+    o.comm = instruction.opcode_info[o.opcode]["comm"]
+    o.args = [binary.LocalIndex(arg_num)]
+    return o
+
+
+def tee_instruction(arg_num: int):
+    o = binary.Instruction()
+    o.opcode = 0x22
+    o.name = instruction.opcode_info[o.opcode]["name"]
+    o.type = instruction.opcode_info[o.opcode]["type"]
+    o.in_arity = instruction.opcode_info[o.opcode]["in_ar"]
+    o.out_arity = instruction.opcode_info[o.opcode]["out_ar"]
+    o.comm = instruction.opcode_info[o.opcode]["comm"]
+    o.args = [binary.LocalIndex(arg_num)]
+    return o
+
+
+def tee_set_dependences(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict,
+                        new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
+                        repeated_values: typing.Set[str]):
+    for i, (ini_local, final_local) in enumerate(zip(initial_locals, final_locals)):
+        if str(ini_local) != str(final_local):
+            # Include set instruction (always possible)
+            set_value = Value.from_term(Term(set_instruction(i), [final_local]))
+            operands_from_value(set_value, current_ops, new_index_per_instr, initial_stack, repeated_values)
+
+            if str(final_local) in repeated_values:
+                tee_value = Value.from_term(Term(tee_instruction(i), [final_local]))
+                operands_from_value(tee_value, current_ops, new_index_per_instr, initial_stack,
+                                    repeated_values)
+
+                # Annotate that both instructions are related
+                set_instr = current_ops[str(set_value)]
+                tee_instr = current_ops[str(tee_value)]
+                set_instr["alternative"] = tee_instr['id']
+                tee_instr["alternative"] = set_instr['id']
 
 
 def mem_access_range(mem_access: Term):
@@ -972,15 +1020,12 @@ def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_a
                    call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction],
                    initial_locals: typing.List[Value], final_locals: typing.List[Value], max_sk_sz: int) -> typing.Dict:
     current_ops = {}
+    repeated_values = set()
     new_index_per_instr = collections.defaultdict(lambda: 0)
-    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack)
-    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack)
-    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack)
-
-    # The state of locals after performing all operations must be stored as well
-    final_var_accesses = [(1, final_local.val()) for ini_local, final_local in zip(initial_locals, final_locals)
-                          if str(ini_local) != str(final_local)]
-    operands_from_accesses(final_var_accesses, current_ops, new_index_per_instr, initial_stack)
+    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, repeated_values)
+    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values)
+    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values)
+    tee_set_dependences(initial_locals, final_locals, current_ops, new_index_per_instr, initial_stack, repeated_values)
 
     combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
     mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
