@@ -75,7 +75,14 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name: str = "cfg.dot"):
             add_edge(acc2, acc1, term_to_id, "dep", f)
 
         for acc1, acc2 in local_deps:
-            add_edge(acc2, acc1, term_to_id, "loc_dep", f)
+            # Avoid repeating accesses for set and tee
+            if "tee" in acc2:
+                continue
+
+            # We need to filter which variable is accessed. acc2 is a set or tee access, and hence
+            # we don't include it in our representation
+            local_name = [instr["value"] for instr in user_instrs if instr["id"] == acc1][0]
+            add_edge(local_name, acc1, term_to_id, "loc_dep", f)
 
         f.write("}\n")
 
