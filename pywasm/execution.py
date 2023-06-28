@@ -644,7 +644,7 @@ class AbstractConfiguration:
     def set_frame(self, frame: Frame):
         self.frame = frame
 
-    def call_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value]):
+    def call_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value], func_address: int):
         log.debugln(f'call {function}({function_args})')
         # for e, t in zip(function_args, function.type.args.data):
         #     assert e.type == t
@@ -659,13 +659,13 @@ class AbstractConfiguration:
                 arity=len(function.type.rets.data),
             )
             self.set_frame(frame)
-            self.exec_symbolic(function, function_args)
+            self.exec_symbolic(function, function_args, func_address)
             return
         if isinstance(function, HostFunc):
             raise Exception(f'pywasm_gasol: host function not allowed to be executed')
         raise Exception(f'pywasm: unknown function type: {function}')
 
-    def exec_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value]):
+    def exec_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value], func_address: int):
 
         blocks = binary.Expression.blocks_from_instructions(self.frame.expr.data)
         for i, block in enumerate(blocks):
@@ -678,7 +678,7 @@ class AbstractConfiguration:
             )
             self.set_frame(frame)
             print(f"Analyzing block {i}")
-            self.exec_symbolic_block(block)
+            self.exec_symbolic_block(block, f"function_{func_address}_block_{i}")
 
     def print_block(self, stack, memory_accesses, var_accesses, call_accesses):
         print(f"Stack:")
@@ -700,7 +700,7 @@ class AbstractConfiguration:
         print('\n'.join([f'({idx}, {str(local_instance)})' for idx, local_instance in enumerate(self.frame.local_list)]))
         print("")
 
-    def exec_symbolic_block(self, block: typing.List[binary.Instruction]):
+    def exec_symbolic_block(self, block: typing.List[binary.Instruction], block_name: str):
         # Remove labels
         basic_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                        instr.opcode not in instruction.end_basic_block_instrs]
@@ -728,7 +728,6 @@ class AbstractConfiguration:
         # print("Var accesses", deps_from_var_accesses(var_accesses, current_ops))
         # print("Mem accesses", deps_from_mem_accesses(memory_accesses, current_ops))
 
-
         values_args = set()
         found = False
         for idx, term in var_accesses:
@@ -742,7 +741,6 @@ class AbstractConfiguration:
                     values_args.add(current_arg)
 
         if found:
-
             print("")
             print("Instructions:")
             print('\n'.join([str(i) for i in basic_block]))
@@ -752,7 +750,7 @@ class AbstractConfiguration:
                 sfs_json = sfs_from_state(initial_stack, self.stack, memory_accesses, var_accesses,
                                           call_accesses, basic_block, initial_locals, final_locals)
                 json.dump(sfs_json, f)
-                dataflow_dot.generate_CFG_dot(sfs_json)
+                dataflow_dot.generate_CFG_dot(sfs_json, f"{block_name}.dot")
 
             # for state in states:
             #     i, instr, stack, m_accesses, v_accesses, c_accesses = state
@@ -2691,7 +2689,7 @@ class Machine:
         config.opts = self.opts
         return config.call(function_addr, function_args)
 
-    def invocate_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value]) -> Result:
+    def invocate_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value], func_address: int) -> Result:
         config = AbstractConfiguration(self.store)
         config.opts = self.opts
-        return config.call_symbolic(function, function_args)
+        return config.call_symbolic(function, function_args, func_address)

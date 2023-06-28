@@ -85,24 +85,24 @@ class Runtime:
             return resp.data[0].val()
         return [e.val() for e in resp.data]
 
-    def symbolic_exec_func(self, func: typing.Union[execution.WasmFunc, execution.HostFunc]):
+    def symbolic_exec_func(self, func: typing.Union[execution.WasmFunc, execution.HostFunc], func_address: int):
         func_args = []
         # Mapping check for python valtype to webAssembly valtype
         for i, e in enumerate(func.type.args.data):
             v = execution.Value.new(convention.symbolic, f"in_{i}")
             func_args.append(v)
-        self.machine.invocate_symbolic(func, func_args)
+        self.machine.invocate_symbolic(func, func_args, func_address)
 
     def symbolic_exec(self, name: str):
         func_addr = self.func_addr(name)
         func = self.machine.store.function_list[func_addr]
-        self.symbolic_exec_func(func)
+        self.symbolic_exec_func(func, func_addr)
 
     def all_symbolic_exec(self):
         for func_addr, func in enumerate(self.machine.store.function_list):
             print(f"{func_addr} {func.type}")
             if isinstance(func, execution.WasmFunc):
-                self.symbolic_exec_func(func)
+                self.symbolic_exec_func(func, func_addr)
 
 
 # Using the pywasm API.
