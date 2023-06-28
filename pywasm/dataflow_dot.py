@@ -17,19 +17,19 @@ def add_consecutive_term(terms: typing.List[str], term_to_id: typing.Dict, label
 
 
 def dot_for_term(term: str, user_instr: typing.List[typing.Dict], term_to_id: typing.Dict,
-                 stack_var_to_id: typing.Dict, label: str, f):
+                 stack_var_to_id: typing.Dict, f):
     if term in term_to_id:
         return
     filtered_instr = [instr for instr in user_instr if instr["id"] == term]
     current_instr = filtered_instr[0] if len(filtered_instr) > 0 else None
     if current_instr is None:
-        add_node(term, term_to_id, "red" if label == "init_stack" else "blue", f)
+        add_node(term, term_to_id, "red", f)
     else:
-        add_node(term, term_to_id, "blue" if label == "final_stack" else "purple" if label == "store" else "green", f)
+        add_node(term, term_to_id, "blue" if len(current_instr["outpt_sk"]) > 0 else "green", f)
 
         children = [stack_var_to_id[child] for child in current_instr['inpt_sk']]
         for child in children:
-            dot_for_term(child, user_instr, term_to_id, stack_var_to_id, "child", f)
+            dot_for_term(child, user_instr, term_to_id, stack_var_to_id, f)
             add_edge(term, child, term_to_id, "child", f)
 
         # If the instruction is not commutative, add a edge to represent the fixed order among elements
@@ -46,20 +46,29 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name: str = "cfg.dot"):
         initial_stack = sfs_json["src_ws"]
         user_instrs = sfs_json["user_instrs"]
         local_changes = sfs_json["local_changes"]
+        mem_deps = sfs_json["memory_dependences"]
 
         stack_var_to_id = {instr['outpt_sk'][0]: instr['id'] for instr in user_instrs if len(instr['outpt_sk']) == 1}
         term_to_id = {}
         for term in initial_stack:
-            dot_for_term(term, user_instrs, term_to_id, stack_var_to_id, "init_stack", f)
+            dot_for_term(term, user_instrs, term_to_id, stack_var_to_id, f)
+
+        add_node("tg_stk", term_to_id, "black", f)
         for term in final_stack:
-            dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, "final_stack", f)
+            dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
+            add_edge("tg_stk", stack_var_to_id[term], term_to_id, "in", f)
 
         store_instrs = [instr for instr in user_instrs if instr['storage']]
         for store_instr in store_instrs:
-            dot_for_term(store_instr['id'], user_instrs, term_to_id, stack_var_to_id, "store", f)
+            dot_for_term(store_instr['id'], user_instrs, term_to_id, stack_var_to_id, f)
 
-        for _, term in local_changes:
-            dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, "local", f)
+        for local, term in local_changes:
+            add_node(local, term_to_id, "orange", f)
+            add_edge(local, stack_var_to_id[term], term_to_id, "in", f)
+            dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
+
+        for acc1, acc2 in mem_deps:
+            add_edge(acc2, acc1, term_to_id, "dep", f)
 
         f.write("}\n")
 
