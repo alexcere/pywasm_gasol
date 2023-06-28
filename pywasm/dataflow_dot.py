@@ -64,6 +64,7 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name: str = "cfg.dot"):
 
         for local, term in local_changes:
             add_node(local, term_to_id, "orange", f)
+            add_node(stack_var_to_id[term], term_to_id, "orange", f)
             add_edge(local, stack_var_to_id[term], term_to_id, "in", f)
             dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
 

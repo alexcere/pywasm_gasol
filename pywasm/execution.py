@@ -746,11 +746,9 @@ class AbstractConfiguration:
             print('\n'.join([str(i) for i in basic_block]))
             print("")
             print("")
-            with open('prueba.json', 'w') as f:
-                sfs_json = sfs_from_state(initial_stack, self.stack, memory_accesses, var_accesses,
-                                          call_accesses, basic_block, initial_locals, final_locals)
-                json.dump(sfs_json, f)
-                dataflow_dot.generate_CFG_dot(sfs_json, f"{block_name}.dot")
+            sfs_json = sfs_from_state(initial_stack, self.stack, memory_accesses, var_accesses,
+                                      call_accesses, basic_block, initial_locals, final_locals)
+            store_json_and_cfg(sfs_json, block_name)
 
             # for state in states:
             #     i, instr, stack, m_accesses, v_accesses, c_accesses = state
@@ -810,7 +808,7 @@ def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: ty
     term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "opcode": opcode_name,
                  "disasm": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": [] if term.instr.out_arity == 0 else [term_var], "commutative": term.instr.comm,
-                 'storage': term.instr.out_arity == 0}
+                 'storage': any(instr in term.instr.name for instr in ["call", "store"])}
     current_ops[str(term)] = term_info
     new_index_per_instr[opcode_name] += 1
     return term_var
@@ -824,7 +822,7 @@ def introduce_variable(variable: str, current_ops: typing.Dict, new_index_per_in
     term_var = f"s({sum(new_index_per_instr.values())})"
     term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "opcode": opcode_name,
                  "disasm": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
-                 "commutative": False, 'storage': False}
+                 "commutative": False, 'storage': False, 'value': variable}
     current_ops[variable] = term_info
     new_index_per_instr[opcode_name] += 1
     return term_var
@@ -972,6 +970,12 @@ def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_a
     tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack)
     operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack)
     operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack)
+
+    # The state of locals after performing all operations must be stored as well
+    final_var_accesses = [(1, final_local.val()) for ini_local, final_local in zip(initial_locals, final_locals)
+                          if str(ini_local) != str(final_local)]
+    operands_from_accesses(final_var_accesses, current_ops, new_index_per_instr, initial_stack)
+
     combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
     mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
     local_changes = state_from_local_variables(initial_locals, final_locals, current_ops)
@@ -983,6 +987,12 @@ def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_a
            'local_changes': local_changes}
 
     return sfs
+
+
+def store_json_and_cfg(sfs_json: typing.Dict, block_name: str) -> None:
+    with open(f"{block_name}.json", 'w') as f:
+        json.dump(sfs_json, f)
+    dataflow_dot.generate_CFG_dot(sfs_json, f"{block_name}.dot")
 
 
 class ArithmeticLogicUnit:
