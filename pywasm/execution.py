@@ -809,11 +809,11 @@ def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: ty
     # First we obtain the stack vars associated to all input values
     input_values = [operands_from_value(input_term, current_ops, new_index_per_instr, initial_stack, repeated_values) for input_term in term.ops]
     opcode_name = term.instr.name
-    term_var = f"s({sum(new_index_per_instr.values())})"
+    term_var = f"s({sum(new_index_per_instr.values())})" if 'tee' not in opcode_name else input_values[0]
     term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "opcode": opcode_name,
                  "disasm": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": [] if term.instr.out_arity == 0 else [term_var], "commutative": term.instr.comm,
-                 'storage': any(instr in term.instr.name for instr in ["call", "store"])}
+                 'storage': any(instr in opcode_name for instr in ["call", "store"])}
     current_ops[str(term)] = term_info
     new_index_per_instr[opcode_name] += 1
     return term_var

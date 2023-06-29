@@ -49,7 +49,7 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name: str = "cfg.dot"):
         mem_deps = sfs_json["memory_dependences"]
         local_deps = sfs_json["local_dependences"]
 
-        stack_var_to_id = {instr['outpt_sk'][0]: instr['id'] for instr in user_instrs if len(instr['outpt_sk']) == 1}
+        stack_var_to_id = {instr['outpt_sk'][0]: instr['id'] for instr in user_instrs if len(instr['outpt_sk']) == 1 and 'tee' not in instr['id']}
         term_to_id = {}
         for term in initial_stack:
             dot_for_term(term, user_instrs, term_to_id, stack_var_to_id, f)
