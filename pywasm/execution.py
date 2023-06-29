@@ -726,6 +726,7 @@ class AbstractConfiguration:
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
         final_locals = copy.deepcopy(self.frame.local_list)
+        global_accesses= [var_access for var_access in var_accesses if "global" in var_access[1].instr.name]
         current_ops = {}
         new_index_per_instr = collections.defaultdict(lambda: 0)
         # print("Stack",operands_from_stack(self.stack, current_ops, new_index_per_instr, initial_stack))
@@ -750,14 +751,13 @@ class AbstractConfiguration:
             print('\n'.join([str(i) for i in basic_block]))
             print("")
             print("")
-            sfs_json = sfs_from_state(initial_stack, self.stack, memory_accesses, var_accesses,
-                                      call_accesses, basic_block, initial_locals, final_locals, self.max_stack_size)
-            store_json_and_cfg(sfs_json, block_name)
+            json_sat = sfs_with_local_changes(initial_stack, self.stack, memory_accesses, global_accesses,
+                                              call_accesses, basic_block, initial_locals, final_locals, self.max_stack_size)
+            store_json(json_sat, block_name)
 
-            # for state in states:
-            #     i, instr, stack, m_accesses, v_accesses, c_accesses = state
-            #     print(f"Step {i}: {str(instr)}")
-            #     self.print_block(stack, m_accesses, v_accesses, c_accesses)
+            # json_dot = sfs_from_state(initial_stack, self.stack, memory_accesses, global_accesses,
+            #                           call_accesses, basic_block, initial_locals, final_locals, self.max_stack_size)
+            # dataflow_dot.generate_CFG_dot(json_dot, f"{block_name}.dot")
 
             print(f"Final state:")
             self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
@@ -863,19 +863,40 @@ def operands_from_value(val: Value, current_ops: typing.Dict, new_index_per_inst
             return introduce_constant(opcode, current_ops, new_index_per_instr, value)
 
 
-def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str], repeated_values: typing.Set[str]):
+# Change from the function above: no instruction is generated for loading locals
+def operands_from_value_no_locals(val: Value, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
+                                  initial_stack: typing.List[str], repeated_values: typing.Set[str]):
+    value = val.val()
+    value_rep = str(value)
+    if value_rep in initial_stack:
+        return value_rep
+    elif value_rep in current_ops:
+        repeated_values.add(value_rep)
+        return current_ops[value_rep]['outpt_sk'][0]
+    else:
+        if val.type == convention.term:
+            return introduce_term(value, current_ops, new_index_per_instr, initial_stack, repeated_values)
+        elif val.type == convention.symbolic:
+            return introduce_variable(value, current_ops, new_index_per_instr) if "global" in value_rep else value_rep
+        else:
+            opcode = val.opcode()
+            return introduce_constant(opcode, current_ops, new_index_per_instr, value)
+
+
+def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
+                        repeated_values: typing.Set[str], op: typing.Callable):
     symbolic_stack = []
     for val in stack.data[::-1]:
-        stack_term = operands_from_value(val, current_ops, new_index_per_instr, initial_stack, repeated_values)
+        stack_term = op(val, current_ops, new_index_per_instr, initial_stack, repeated_values)
         symbolic_stack.append(stack_term)
     return symbolic_stack
 
 
 def operands_from_accesses(accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict,
                            new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
-                           repeated_values: typing.Set[str]):
+                           repeated_values: typing.Set[str], op:typing.Callable):
     for _, val in accesses:
-        operands_from_value(Value.from_term(val), current_ops, new_index_per_instr, initial_stack, repeated_values)
+        op(Value.from_term(val), current_ops, new_index_per_instr, initial_stack, repeated_values)
 
 
 def set_instruction(arg_num: int):
@@ -984,8 +1005,9 @@ def are_dependent_mem_access(mem_access1: Term, mem_access2: Term):
 
 
 def are_dependent_var_access(var_access1: Term, var_access2: Term):
-    return ("get" not in var_access1.instr.name or "get" not in var_access2.instr.name) \
-        and var_access1.instr.args[0] == var_access2.instr.args[0]
+    return ("call" in var_access1.instr.name or "call" in var_access2.instr.name) or \
+        (("get" not in var_access1.instr.name or "get" not in var_access2.instr.name)
+         and var_access1.instr.args[0] == var_access2.instr.args[0])
 
 
 def simplify_dependencies(deps: typing.List[typing.Tuple[int, int]]) -> typing.List[typing.Tuple[int, int]]:
@@ -1008,9 +1030,15 @@ def deps_from_mem_accesses(mem_accesses: typing.List[typing.Tuple[int, Term]], c
     return [(current_ops[str(mem_accesses[i][1])]['id'], current_ops[str(mem_accesses[j][1])]['id']) for i, j in simplify_dependencies(dependencies)]
 
 
-def state_from_local_variables(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict):
-    modified_locals = [(str(ini_local), current_ops[str(final_local)]['outpt_sk'][0]) for ini_local, final_local in zip(initial_locals, final_locals)
-                       if str(ini_local) != str(final_local)]
+def state_from_local_variables(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict,
+                               new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
+                               repeated_values: typing.Set[str], op: typing.Callable):
+    modified_locals = []
+    for ini_local, final_local in zip(initial_locals, final_locals):
+        if str(ini_local) != str(final_local):
+            if str(final_local) not in current_ops:
+                op(final_local, current_ops, new_index_per_instr, initial_stack, repeated_values)
+            modified_locals.append((str(ini_local), current_ops[str(final_local)]['outpt_sk'][0]))
     return modified_locals
 
 
@@ -1025,36 +1053,68 @@ def initial_length(instrs: typing.List[binary.Instruction]):
 
 
 def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_accesses: typing.List[typing.Tuple[int, Term]],
-                   var_accesses: typing.List[typing.Tuple[int, Term]],
+                   global_accesses: typing.List[typing.Tuple[int, Term]],
                    call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction],
                    initial_locals: typing.List[Value], final_locals: typing.List[Value], max_sk_sz: int) -> typing.Dict:
     current_ops = {}
     repeated_values = set()
     new_index_per_instr = collections.defaultdict(lambda: 0)
-    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, repeated_values)
-    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values)
-    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values)
+    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value)
+    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value)
+    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value)
     local_deps = tee_set_dependences(initial_locals, final_locals, current_ops, new_index_per_instr, initial_stack, repeated_values)
 
     combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
     mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
-    local_changes = state_from_local_variables(initial_locals, final_locals, current_ops)
+    local_changes = state_from_local_variables(initial_locals, final_locals, current_ops, new_index_per_instr,
+                                               initial_stack, repeated_values, operands_from_value)
+
+    combined_accesses = sorted([*global_accesses, *call_accesses], key=lambda kv: kv[0])
+    global_deps = deps_from_var_accesses(combined_accesses, current_ops)
     # local_deps = deps_from_modified_locals(initial_locals, final_locals, current_ops)
-    print("local deps", local_deps)
+
     b0 = initial_length(instrs)
     bs = max_sk_sz
     sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': [], 'local_dependences': local_deps,
            "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()), 'memory_dependences': mem_deps,
            'is_revert': False, 'rules_applied': False, 'rules': [], 'original_instrs': ' '.join((str(instr) for instr in instrs)),
-           'local_changes': local_changes}
+           'local_changes': local_changes, 'global_dependences': global_deps}
 
     return sfs
 
 
-def store_json_and_cfg(sfs_json: typing.Dict, block_name: str) -> None:
+def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, memory_accesses: typing.List[typing.Tuple[int, Term]],
+                           global_accesses: typing.List[typing.Tuple[int, Term]],
+                           call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction],
+                           initial_locals: typing.List[Value], final_locals: typing.List[Value], max_sk_sz: int) -> typing.Dict:
+    current_ops = {}
+    repeated_values = set()
+    new_index_per_instr = collections.defaultdict(lambda: 0)
+    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value_no_locals)
+    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value_no_locals)
+    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value_no_locals)
+    operands_from_accesses(global_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value_no_locals)
+
+    combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
+    mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
+
+    combined_accesses = sorted([*global_accesses, *call_accesses], key=lambda kv: kv[0])
+    global_deps = deps_from_var_accesses(combined_accesses, current_ops)
+
+    local_changes = state_from_local_variables(initial_locals, final_locals, current_ops, new_index_per_instr,
+                                               initial_stack, repeated_values, operands_from_value_no_locals)
+    b0 = initial_length(instrs)
+    bs = max_sk_sz
+    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': [],
+           "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()), 'memory_dependences': mem_deps,
+           'global_dependences': global_deps,'is_revert': False, 'rules_applied': False, 'rules': [],
+           'original_instrs': ' '.join((str(instr) for instr in instrs)), 'local_changes': local_changes}
+    return sfs
+
+
+def store_json(sfs_json: typing.Dict, block_name: str) -> None:
     with open(f"{block_name}.json", 'w') as f:
         json.dump(sfs_json, f)
-    dataflow_dot.generate_CFG_dot(sfs_json, f"{block_name}.dot")
 
 
 class ArithmeticLogicUnit:
