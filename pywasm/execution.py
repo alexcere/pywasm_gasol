@@ -655,10 +655,11 @@ class AbstractConfiguration:
         assert len(function.type.rets.data) < 2
 
         if isinstance(function, WasmFunc):
-            local_list = [Value.new(convention.symbolic, f"local_{i}") for i in range(len(function.code.local_list))]
+            # Group function args and local list as a single list of "local_{i}" symbolic values
+            local_list = [Value.new(convention.symbolic, f"local_{i}") for i in range(len(function_args) + len(function.code.local_list))]
             frame = Frame(
                 module=function.module,
-                local_list=function_args + local_list,
+                local_list=local_list,
                 expr=function.code.expr,
                 arity=len(function.type.rets.data),
             )
@@ -673,10 +674,11 @@ class AbstractConfiguration:
 
         blocks = binary.Expression.blocks_from_instructions(self.frame.expr.data)
         for i, block in enumerate(blocks):
-            local_list = [Value.new(convention.symbolic, f"local_{i}") for i in range(len(function.code.local_list))]
+            # Group function args and local list as a single list of "local_{i}" symbolic values
+            local_list = [Value.new(convention.symbolic, f"local_{i}") for i in range(len(function_args) + len(function.code.local_list))]
             frame = Frame(
                 module=function.module,
-                local_list=function_args + local_list,
+                local_list=local_list,
                 expr=function.code.expr,
                 arity=len(function.type.rets.data),
             )
