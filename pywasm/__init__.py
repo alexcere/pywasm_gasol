@@ -9,6 +9,7 @@ from . import log
 from . import num
 from . import option
 from . import validation
+from . import global_params
 
 
 class Runtime:

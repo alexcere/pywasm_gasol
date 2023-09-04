@@ -12,6 +12,7 @@ from . import instruction
 from . import log
 from . import num
 from . import option
+from . import global_params
 from . import dataflow_dot
 
 import sys
@@ -1129,7 +1130,7 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, 
 
 
 def store_json(sfs_json: typing.Dict, block_name: str) -> None:
-    with open(f"{block_name}.json", 'w') as f:
+    with open(global_params.FINAL_FOLDER.joinpath(f"{block_name}.json"), 'w') as f:
         json.dump(sfs_json, f)
 
 

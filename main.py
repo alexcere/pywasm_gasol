@@ -1,8 +1,30 @@
 import sys
+from pathlib import Path
+from argparse import ArgumentParser, Namespace
 import pywasm
 # pywasm.on_debug()
 
+
+def parse_args() -> Namespace:
+    ap = ArgumentParser(description='Wasm Block Functional Specification tool')
+
+    input_options = ap.add_argument_group('Input options')
+    input_options.add_argument('input_file', help='Wasm file to analyze', action='store')
+
+    output_options = ap.add_argument_group('Output options')
+    output_options.add_argument('-o', '--output', help="Folder to store blocks' specification",
+                                dest="final_folder", action='store')
+    return ap.parse_args()
+
+
+def initialize(arguments: Namespace) -> None:
+    if arguments.final_folder is not None:
+        pywasm.global_params.FINAL_FOLDER = Path(arguments.final_folder)
+
+
 if __name__ == "__main__":
-    runtime = pywasm.load(sys.argv[1])
+    parsed_args = parse_args()
+    initialize(parsed_args)
+    runtime = pywasm.load(parsed_args.input_file)
     # r = runtime.exec('main', [5,6])
     runtime.all_symbolic_exec()
