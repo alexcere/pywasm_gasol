@@ -874,13 +874,13 @@ def operands_from_value_no_locals(val: Value, current_ops: typing.Dict, new_inde
     if value_rep in initial_stack:
         return value_rep
     elif value_rep in current_ops:
-        repeated_values.add(value_rep)
         return current_ops[value_rep]['outpt_sk'][0]
     else:
         if val.type == convention.term:
             return introduce_term(value, current_ops, new_index_per_instr, initial_stack, repeated_values,
                                   operands_from_value_no_locals)
         elif val.type == convention.symbolic:
+            repeated_values.add(value_rep)
             return introduce_variable(value, current_ops, new_index_per_instr) if "global" in value_rep else value_rep
         else:
             opcode = val.opcode()
@@ -1043,6 +1043,8 @@ def state_from_local_variables(initial_locals: typing.List[Value], final_locals:
             if str(final_local) not in current_ops:
                 op(final_local, current_ops, new_index_per_instr, initial_stack, repeated_values)
             modified_locals.append((str(ini_local), current_ops[str(final_local)]['outpt_sk'][0]))
+        elif str(ini_local) in repeated_values:
+            modified_locals.append((str(ini_local), str(final_local)))
     return modified_locals
 
 
@@ -1074,7 +1076,8 @@ def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_a
                                                initial_stack, repeated_values, operands_from_value)
 
     combined_accesses = sorted([*global_accesses, *call_accesses], key=lambda kv: kv[0])
-    global_deps = deps_from_var_accesses(combined_accesses, current_ops)
+    global_deps = [(acc1, acc2) for acc1, acc2 in deps_from_var_accesses(combined_accesses, current_ops)
+                   if "call" not in acc1 or "call" not in acc2]
     # local_deps = deps_from_modified_locals(initial_locals, final_locals, current_ops)
 
     b0 = initial_length(instrs)
@@ -1092,26 +1095,35 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, 
                            call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction],
                            initial_locals: typing.List[Value], final_locals: typing.List[Value], max_sk_sz: int) -> typing.Dict:
     current_ops = {}
-    repeated_values = set()
+    used_values = set()
     new_index_per_instr = collections.defaultdict(lambda: 0)
-    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value_no_locals)
-    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value_no_locals)
-    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value_no_locals)
-    operands_from_accesses(global_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value_no_locals)
+    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
+    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
+    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
+    operands_from_accesses(global_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
 
     combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
     mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
 
     combined_accesses = sorted([*global_accesses, *call_accesses], key=lambda kv: kv[0])
-    global_deps = deps_from_var_accesses(combined_accesses, current_ops)
+    global_deps = [(acc1, acc2) for acc1, acc2 in deps_from_var_accesses(combined_accesses, current_ops)
+                   if "call" not in acc1 or "call" not in acc2]
 
     local_changes = state_from_local_variables(initial_locals, final_locals, current_ops, new_index_per_instr,
-                                               initial_stack, repeated_values, operands_from_value_no_locals)
+                                               initial_stack, used_values, operands_from_value_no_locals)
+    local_changes_ini = [pair[0] for pair in local_changes]
+
+    # Include vars from the instructions, initial stack and initial locals
+    used_vars = set(instr['outpt_sk'][0] for instr in current_ops.values() if len(instr['outpt_sk']) > 0)
+    used_vars.update((str(elem) for elem in initial_stack))
+    used_vars.update((str(ini_local) for ini_local, final_local in zip(initial_locals, final_locals)
+                      if str(ini_local) in local_changes_ini))
+
     b0 = initial_length(instrs)
     bs = max_sk_sz
-    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': [],
-           "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()), 'memory_dependences': mem_deps,
-           'global_dependences': global_deps,'is_revert': False, 'rules_applied': False, 'rules': [],
+    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': list(used_vars),
+           "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()), 'memory_dependencies': mem_deps,
+           'global_dependencies': global_deps,'is_revert': False, 'rules_applied': False, 'rules': [],
            'original_instrs': ' '.join((str(instr) for instr in instrs)), 'local_changes': local_changes}
     return sfs
 
