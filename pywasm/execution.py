@@ -168,22 +168,58 @@ class Value:
         return o
 
 
+def term_to_string(instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]],
+                   sub_index: typing.Optional[int] = None) -> str:
+    """
+    String that represents a term unequivocally
+
+    :param instr: instruction to represent
+    :param operands: list of terms/values that are the operands of the operation. Assume __str__ is defined
+    :param sub_index: the subindex is used to identify different subterms if a term represents different values.
+        For instance, if call(a,b) returns two values in the stack, then we could create terms call_1(a,b) and call_2(a,b)
+    :return: the str representation
+    """
+    if instr.comm:
+        joined_operands = f"({','.join(sorted(map(str, operands)))})" if operands else ""
+    else:
+        joined_operands = f"({','.join(map(str, operands))})" if operands else ""
+
+    sub_index = f"_{sub_index}" if sub_index is not None else ""
+    return f"{instr}{sub_index}{joined_operands}"
+
 class Term:
     # A term consists of either a value or an instruction applied to other terms.
 
-    def __init__(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]], sub_index: typing.Optional[int] = None):
+    def __init__(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]],
+                 sub_index: typing.Optional[int] = None, term_repr: str = None):
+        # We allow passing the representation as an argument to allow repeating computations
         self.instr: binary.Instruction = instr
         self.ops: typing.List[typing.Union['Term', Value]] = operands
         self.sub_index: int = sub_index
-        self.repr: str = self._to_string()
-
-    def _to_string(self):
-        joined_operands = f"({','.join([str(op) for op in self.ops])})" if len(self.ops) > 0 else ""
-        sub_index = f"_{self.sub_index}" if self.sub_index is not None else ""
-        return f"{self.instr}{sub_index}{joined_operands}"
+        self.repr: str = term_to_string(instr, operands, sub_index) if term_repr is None else term_repr
 
     def __str__(self):
         return self.repr
+
+
+class TermFactory:
+    """
+    Factory to create terms. So far, it only avoids creating repeated terms
+    """
+    def __init__(self):
+        self._terms_created: typing.Dict = {}
+
+    def term(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]],
+             sub_index: typing.Optional[int] = None):
+        term_repr = term_to_string(instr, operands, sub_index)
+        if term_repr in self._terms_created:
+            return self._terms_created[term_repr]
+        new_term = Term(instr, operands, sub_index, term_repr)
+        self._terms_created[term_repr] = new_term
+        return new_term
+
+    def created(self):
+        return len(self._terms_created)
 
 
 class Result:
@@ -584,6 +620,7 @@ class AbstractConfiguration:
         self.pc = None
         self.opts = None
         self.max_stack_size = None
+        self.term_factory: typing.Optional[TermFactory] = None
 
     def init_stack_size(self, block: typing.List[binary.Instruction]):
         current_stack = 0
@@ -637,6 +674,7 @@ class AbstractConfiguration:
         self.initialize_stack(block)
         self.depth = 0
         self.pc = 0
+        self.term_factory = TermFactory()
         self.opts: option.Option = option.Option()
 
     def get_label(self, i: int) -> Label:
@@ -730,6 +768,7 @@ class AbstractConfiguration:
         for i, instr in enumerate(basic_block):
             # states.append([i, instr, copy.deepcopy(self.stack), copy.deepcopy(memory_accesses),
             #               copy.deepcopy(var_accesses), copy.deepcopy(call_accesses)])
+            print(i, instr, self.term_factory.created())
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
         final_locals = copy.deepcopy(self.frame.local_list)
@@ -781,17 +820,13 @@ def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> Term:
     # First we remove from the stack the elements that have been consumed
     operands = [config.stack.pop() for _ in range(i.in_arity)]
 
-    # To have a canonical representation, we sort the args in comm operations
-    if i.comm:
-        operands = sorted(operands, key=lambda x: str(x))
-
-    result = Term(i, operands)
+    result = config.term_factory.term(i, operands)
     ar = i.out_arity
     # Then we introduce the values in the stack
     # If ar > 1, then we create a term per introduced value in the stack
     if i.out_arity > 1:
         while ar > 0:
-            config.stack.append(Value.from_term(Term(i, operands, ar)))
+            config.stack.append(Value.from_term(config.term_factory.term(i, operands, ar)))
             ar -= 1
     elif i.out_arity == 1:
         config.stack.append(Value.from_term(result))
@@ -802,12 +837,7 @@ def term_from_func(config: AbstractConfiguration, i: binary.Instruction) -> Term
     # First we remove from the stack the elements that have been consumed
     operands = [elem for elem in config.stack.data[-1:-i.in_arity - 1:-1]]
 
-    # To have a canonical representation, we sort the args in comm operations
-    if i.comm:
-        operands = sorted(operands, key=lambda x: str(x))
-
-    result = Term(i, operands)
-    # Then we introduce the values in the stack
+    result = config.term_factory.term(i, operands)
     return result
 
 
