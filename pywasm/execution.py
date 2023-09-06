@@ -175,11 +175,15 @@ class Term:
         self.instr: binary.Instruction = instr
         self.ops: typing.List[typing.Union['Term', Value]] = operands
         self.sub_index: int = sub_index
+        self.repr: str = self._to_string()
 
-    def __str__(self):
+    def _to_string(self):
         joined_operands = f"({','.join([str(op) for op in self.ops])})" if len(self.ops) > 0 else ""
         sub_index = f"_{self.sub_index}" if self.sub_index is not None else ""
         return f"{self.instr}{sub_index}{joined_operands}"
+
+    def __str__(self):
+        return self.repr
 
 
 class Result:
@@ -719,13 +723,13 @@ class AbstractConfiguration:
         memory_accesses = []
         var_accesses = []
         call_accesses = []
-        states = []
+        # states = []
         initial_stack = [str(elem) for elem in self.stack.data[::-1]]
         initial_locals = copy.deepcopy(self.frame.local_list)
 
         for i, instr in enumerate(basic_block):
-            states.append([i, instr, copy.deepcopy(self.stack), copy.deepcopy(memory_accesses),
-                           copy.deepcopy(var_accesses), copy.deepcopy(call_accesses)])
+            # states.append([i, instr, copy.deepcopy(self.stack), copy.deepcopy(memory_accesses),
+            #               copy.deepcopy(var_accesses), copy.deepcopy(call_accesses)])
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
         final_locals = copy.deepcopy(self.frame.local_list)
@@ -1417,7 +1421,7 @@ class ArithmeticLogicUnit:
         o = Value()
         o.type = r.type
         if o.type == convention.symbolic or o.type == convention.term:
-            o.data = copy.deepcopy(r.data)
+            o.data = r.data
         else:
             o.data = r.data.copy()
         config.stack.append(o)
@@ -1433,7 +1437,7 @@ class ArithmeticLogicUnit:
         o = Value()
         o.type = r.type
         if o.type == convention.symbolic or o.type == convention.term:
-            o.data = copy.deepcopy(r.data)
+            o.data = r.data
         else:
             o.data = r.data.copy()
         config.frame.local_list[i.args[0]] = o
