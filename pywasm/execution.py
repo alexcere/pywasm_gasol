@@ -768,10 +768,10 @@ class AbstractConfiguration:
         for i, instr in enumerate(basic_block):
             # states.append([i, instr, copy.deepcopy(self.stack), copy.deepcopy(memory_accesses),
             #               copy.deepcopy(var_accesses), copy.deepcopy(call_accesses)])
-            print(i, instr, self.term_factory.created())
+            # print(i, instr, self.term_factory.created())
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
-        final_locals = copy.deepcopy(self.frame.local_list)
+        final_locals = self.frame.local_list
         global_accesses= [var_access for var_access in var_accesses if "global" in var_access[1].instr.name]
         current_ops = {}
         new_index_per_instr = collections.defaultdict(lambda: 0)
@@ -779,19 +779,7 @@ class AbstractConfiguration:
         # print("Var accesses", deps_from_var_accesses(var_accesses, current_ops))
         # print("Mem accesses", deps_from_mem_accesses(memory_accesses, current_ops))
 
-        values_args = set()
-        found = False
-        for idx, term in var_accesses:
-            current_args = term.instr.args
-            if len(current_args) > 0:
-                assert len(current_args) == 1
-                current_arg = current_args[0]
-                if current_arg in values_args:
-                    found = True
-                elif term.instr.name == "local.set":
-                    values_args.add(current_arg)
-
-        if found:
+        if interesting_block(var_accesses):
             print("")
             print("Instructions:")
             print('\n'.join([str(i) for i in basic_block]))
@@ -801,14 +789,27 @@ class AbstractConfiguration:
                                               call_accesses, basic_block, initial_locals, final_locals, self.max_stack_size)
             store_json(json_sat, block_name)
 
-            # json_dot = sfs_from_state(initial_stack, self.stack, memory_accesses, global_accesses,
-            #                           call_accesses, basic_block, initial_locals, final_locals, self.max_stack_size)
             # dataflow_dot.generate_CFG_dot(json_dot, f"{block_name}.dot")
 
             print(f"Final state:")
             self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
 
 
+def interesting_block(var_accesses: typing.List[typing.Tuple[int, Term]]) -> bool:
+    """
+    Blocks are interesting when a variable is that is used is then stored using local.set (instead of local.tee)
+    """
+    values_args = set()
+    for idx, term in var_accesses:
+        current_args = term.instr.args
+        if len(current_args) > 0:
+            assert len(current_args) == 1
+            current_arg = current_args[0]
+            if current_arg in values_args:
+                return True
+            elif term.instr.name == "local.set":
+                values_args.add(current_arg)
+    return False
 
 # ======================================================================================================================
 # Instruction Set
@@ -847,10 +848,10 @@ def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: ty
     input_values = [op(input_term, current_ops, new_index_per_instr, initial_stack, repeated_values) for input_term in term.ops]
     opcode_name = term.instr.name
     term_var = f"s({sum(new_index_per_instr.values())})" if 'tee' not in opcode_name else input_values[0]
-    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "opcode": opcode_name,
-                 "disasm": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
+    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
+                 "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": [] if term.instr.out_arity == 0 else [term_var], "commutative": term.instr.comm,
-                 'storage': any(instr in opcode_name for instr in ["call", "store"])}
+                 'storage': any(instr in opcode_name for instr in ["call", "store"]), 'gas': 1, 'size': 1}
     current_ops[str(term)] = term_info
     new_index_per_instr[opcode_name] += 1
     return term_var
@@ -862,9 +863,9 @@ def introduce_variable(variable: str, current_ops: typing.Dict, new_index_per_in
     opcode_info = instruction.opcode_info[opcode]
     opcode_name = opcode_info["name"]
     term_var = f"s({sum(new_index_per_instr.values())})"
-    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "opcode": opcode_name,
-                 "disasm": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
-                 "commutative": False, 'storage': False, 'value': variable}
+    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
+                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
+                 "commutative": False, 'storage': False, 'value': variable,  'gas': 1, 'size': 1}
     current_ops[variable] = term_info
     new_index_per_instr[opcode_name] += 1
     return term_var
@@ -873,9 +874,9 @@ def introduce_variable(variable: str, current_ops: typing.Dict, new_index_per_in
 def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_instr: typing.Dict, constant) -> str:
     opcode_info = instruction.opcode_info[opcode]
     term_var = f"s({sum(new_index_per_instr.values())})"
-    term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "opcode": opcode_info["name"],
-                 "disasm": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
-                 "commutative": False, 'storage': False, 'value': constant}
+    term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "disasm": opcode_info["name"],
+                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
+                 "commutative": False, 'storage': False, 'value': constant, 'gas': 1, 'size': 1}
     current_ops[str(constant)] = term_info
     new_index_per_instr['PUSH'] += 1
     return term_var
@@ -1093,38 +1094,6 @@ def initial_length(instrs: typing.List[binary.Instruction]):
     return len(instrs)
 
 
-def sfs_from_state(initial_stack: typing.List[str], final_stack: Stack, memory_accesses: typing.List[typing.Tuple[int, Term]],
-                   global_accesses: typing.List[typing.Tuple[int, Term]],
-                   call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction],
-                   initial_locals: typing.List[Value], final_locals: typing.List[Value], max_sk_sz: int) -> typing.Dict:
-    current_ops = {}
-    repeated_values = set()
-    new_index_per_instr = collections.defaultdict(lambda: 0)
-    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value)
-    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value)
-    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, repeated_values, operands_from_value)
-    local_deps = tee_set_dependences(initial_locals, final_locals, current_ops, new_index_per_instr, initial_stack, repeated_values)
-
-    combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
-    mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
-    local_changes = state_from_local_variables(initial_locals, final_locals, current_ops, new_index_per_instr,
-                                               initial_stack, repeated_values, operands_from_value)
-
-    combined_accesses = sorted([*global_accesses, *call_accesses], key=lambda kv: kv[0])
-    global_deps = [(acc1, acc2) for acc1, acc2 in deps_from_var_accesses(combined_accesses, current_ops)
-                   if "call" not in acc1 or "call" not in acc2]
-    # local_deps = deps_from_modified_locals(initial_locals, final_locals, current_ops)
-
-    b0 = initial_length(instrs)
-    bs = max_sk_sz
-    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': [], 'local_dependences': local_deps,
-           "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()), 'memory_dependences': mem_deps,
-           'is_revert': False, 'rules_applied': False, 'rules': [], 'original_instrs': ' '.join((str(instr) for instr in instrs)),
-           'local_changes': local_changes, 'global_dependences': global_deps}
-
-    return sfs
-
-
 def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, memory_accesses: typing.List[typing.Tuple[int, Term]],
                            global_accesses: typing.List[typing.Tuple[int, Term]],
                            call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction],
@@ -1156,9 +1125,11 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, 
 
     b0 = initial_length(instrs)
     bs = max_sk_sz
-    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'vars': list(used_vars),
-           "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()), 'memory_dependencies': mem_deps,
-           'global_dependencies': global_deps,'is_revert': False, 'rules_applied': False, 'rules': [],
+    n_locals = 0
+    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'max_locals': n_locals, 'vars': list(used_vars),
+           "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()),
+           'memory_dependencies': mem_deps, 'global_dependencies': global_deps, 'dependencies': [*mem_deps, *global_deps],
+           'current_cost': len(instrs), 'is_revert': False, 'rules_applied': False, 'rules': [],
            'original_instrs': ' '.join((str(instr) for instr in instrs)), 'local_changes': local_changes}
     return sfs
 
@@ -1372,7 +1343,7 @@ class ArithmeticLogicUnit:
 
         # We identify the instructions by its address
         new_instr.opcode = 0x10
-        new_instr.name = f"call_{function_addr}"
+        new_instr.name = f"call[{function_addr}]"
         new_instr.args: typing.List[typing.Any] = []
         new_instr.type: instruction.InstructionType = instruction.InstructionType.control
         new_instr.in_arity: int = len(function_type.args.data)
