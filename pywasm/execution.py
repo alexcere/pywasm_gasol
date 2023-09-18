@@ -1133,9 +1133,9 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, 
     b0 = initial_length(instrs)
     bs = max_sk_sz
     n_locals = 0
-    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'max_registers_sz': n_locals, 'vars': list(used_vars),
-           "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()),
-           'dependencies': [*mem_deps, *global_deps], 'original_instrs': ' '.join((str(instr) for instr in instrs)),
+    sfs = {'init_progr_len': b0, 'vars': list(used_vars), 'max_sk_sz': bs, "src_ws": initial_stack, "tgt_ws": tgt_stack,
+           "user_instrs": list(current_ops.values()), 'dependencies': [*mem_deps, *global_deps],
+           'original_instrs': ' '.join((str(instr) for instr in instrs)), 'max_registers_sz': n_locals,
            'register_changes': local_changes}
     return sfs
 
