@@ -1075,14 +1075,19 @@ def deps_from_mem_accesses(mem_accesses: typing.List[typing.Tuple[int, Term]], c
 def state_from_local_variables(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict,
                                new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
                                repeated_values: typing.Set[str], op: typing.Callable):
+    """
+    Returns a list of tuples representing the local variables. Each tuple contains the initial variable and final
+    variable of a local, and only those locals in which they differ are included.
+    """
     modified_locals = []
     for ini_local, final_local in zip(initial_locals, final_locals):
         if str(ini_local) != str(final_local):
             if str(final_local) not in current_ops:
                 op(final_local, current_ops, new_index_per_instr, initial_stack, repeated_values)
             modified_locals.append((str(ini_local), current_ops[str(final_local)]['outpt_sk'][0]))
-        elif str(ini_local) in repeated_values:
-            modified_locals.append((str(ini_local), str(final_local)))
+        # Uncomment to include all the locals that are used at some point (even if their value remains unchanged)
+        # elif str(ini_local) in repeated_values:
+        #     modified_locals.append((str(ini_local), str(final_local)))
     return modified_locals
 
 
@@ -1128,11 +1133,10 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, 
     b0 = initial_length(instrs)
     bs = max_sk_sz
     n_locals = 0
-    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'max_locals': n_locals, 'vars': list(used_vars),
+    sfs = {'init_progr_len': b0, 'max_progr_len': b0, 'max_sk_sz': bs, 'max_registers_sz': n_locals, 'vars': list(used_vars),
            "src_ws": initial_stack, "tgt_ws": tgt_stack, "user_instrs": list(current_ops.values()),
-           'memory_dependencies': mem_deps, 'global_dependencies': global_deps, 'dependencies': [*mem_deps, *global_deps],
-           'current_cost': len(instrs), 'is_revert': False, 'rules_applied': False, 'rules': [],
-           'original_instrs': ' '.join((str(instr) for instr in instrs)), 'local_changes': local_changes}
+           'dependencies': [*mem_deps, *global_deps], 'original_instrs': ' '.join((str(instr) for instr in instrs)),
+           'register_changes': local_changes}
     return sfs
 
 
