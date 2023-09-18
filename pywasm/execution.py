@@ -791,7 +791,7 @@ class AbstractConfiguration:
             json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"], json_sat["dependencies"])
             store_json(json_sat, block_name)
 
-            # dataflow_dot.generate_CFG_dot(json_sat, f"{block_name}.dot")
+            # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
 
             print(f"Final state:")
             self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
@@ -852,7 +852,7 @@ def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: ty
     term_var = f"s({sum(new_index_per_instr.values())})" if 'tee' not in opcode_name else input_values[0]
     term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
                  "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
-                 "outpt_sk": [] if term.instr.out_arity == 0 else [term_var], "commutative": term.instr.comm,
+                 "outpt_sk": [] if term.instr.out_arity == 0 else [term_var], 'push': False, "commutative": term.instr.comm,
                  'storage': any(instr in opcode_name for instr in ["call", "store"]), 'gas': 1, 'size': 1}
     current_ops[str(term)] = term_info
     new_index_per_instr[opcode_name] += 1
@@ -866,7 +866,7 @@ def introduce_variable(variable: str, current_ops: typing.Dict, new_index_per_in
     opcode_name = opcode_info["name"]
     term_var = f"s({sum(new_index_per_instr.values())})"
     term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
-                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
+                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var], 'push': False,
                  "commutative": False, 'storage': False, 'value': variable,  'gas': 1, 'size': 1}
     current_ops[variable] = term_info
     new_index_per_instr[opcode_name] += 1
@@ -877,7 +877,7 @@ def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_inst
     opcode_info = instruction.opcode_info[opcode]
     term_var = f"s({sum(new_index_per_instr.values())})"
     term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "disasm": opcode_info["name"],
-                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var],
+                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var], 'push': True,
                  "commutative": False, 'storage': False, 'value': constant, 'gas': 1, 'size': 1}
     current_ops[str(constant)] = term_info
     new_index_per_instr['PUSH'] += 1
