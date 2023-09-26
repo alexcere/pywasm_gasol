@@ -873,6 +873,19 @@ def introduce_variable(variable: str, current_ops: typing.Dict, new_index_per_in
     return term_var
 
 
+def introduce_local(local_name: str, current_ops: typing.Dict, new_index_per_instr: typing.Dict) -> str:
+    opcode = 0x20
+    opcode_info = instruction.opcode_info[opcode]
+    opcode_name = opcode_info["name"]
+    opcode_info = instruction.opcode_info[opcode]
+    term_var = f"s({sum(new_index_per_instr.values())})"
+    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_info["name"],
+                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [local_name], 'push': False,
+                 "commutative": False, 'storage': False, 'gas': 1, 'size': 1}
+    current_ops[local_name] = term_info
+    new_index_per_instr[opcode_name] += 1
+    return term_var
+
 def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_instr: typing.Dict, constant) -> str:
     opcode_info = instruction.opcode_info[opcode]
     term_var = f"s({sum(new_index_per_instr.values())})"
@@ -956,6 +969,18 @@ def set_instruction(arg_num: int):
 def tee_instruction(arg_num: int):
     o = binary.Instruction()
     o.opcode = 0x22
+    o.name = instruction.opcode_info[o.opcode]["name"]
+    o.type = instruction.opcode_info[o.opcode]["type"]
+    o.in_arity = instruction.opcode_info[o.opcode]["in_ar"]
+    o.out_arity = instruction.opcode_info[o.opcode]["out_ar"]
+    o.comm = instruction.opcode_info[o.opcode]["comm"]
+    o.args = [binary.LocalIndex(arg_num)]
+    return o
+
+
+def get_instruction(arg_num: int):
+    o = binary.Instruction()
+    o.opcode = 0x20
     o.name = instruction.opcode_info[o.opcode]["name"]
     o.type = instruction.opcode_info[o.opcode]["type"]
     o.in_arity = instruction.opcode_info[o.opcode]["in_ar"]
@@ -1080,14 +1105,14 @@ def state_from_local_variables(initial_locals: typing.List[Value], final_locals:
     variable of a local, and only those locals in which they differ are included.
     """
     modified_locals = []
-    for ini_local, final_local in zip(initial_locals, final_locals):
+    for i, (ini_local, final_local) in enumerate(zip(initial_locals, final_locals)):
         if str(ini_local) != str(final_local):
             if str(final_local) not in current_ops:
                 op(final_local, current_ops, new_index_per_instr, initial_stack, repeated_values)
             modified_locals.append((str(ini_local), current_ops[str(final_local)]['outpt_sk'][0]))
-        # Uncomment to include all the locals that are used at some point (even if their value remains unchanged)
-        # elif str(ini_local) in repeated_values:
-        #     modified_locals.append((str(ini_local), str(final_local)))
+        # Locals that contain values that are used but are not modified are considered directly as UF
+        elif str(ini_local) in repeated_values:
+            introduce_local(str(ini_local), current_ops, new_index_per_instr)
     return modified_locals
 
 
@@ -1132,7 +1157,8 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, 
 
     b0 = initial_length(instrs)
     bs = max_sk_sz
-    n_locals = 0
+    # Number of elements in current ops
+    n_locals = len(current_ops)
     sfs = {'init_progr_len': b0, 'vars': list(used_vars), 'max_sk_sz': bs, "src_ws": initial_stack, "tgt_ws": tgt_stack,
            "user_instrs": list(current_ops.values()), 'dependencies': [*mem_deps, *global_deps],
            'original_instrs': ' '.join((str(instr) for instr in instrs)), 'max_registers_sz': n_locals,
