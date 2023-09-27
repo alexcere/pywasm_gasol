@@ -188,6 +188,7 @@ def term_to_string(instr: binary.Instruction, operands: typing.List[typing.Union
     sub_index = f"_{sub_index}" if sub_index is not None else ""
     return f"{instr}{sub_index}{joined_operands}"
 
+
 class Term:
     # A term consists of either a value or an instruction applied to other terms.
 
@@ -199,7 +200,14 @@ class Term:
         self.sub_index: int = sub_index
         self.repr: str = term_to_string(instr, operands, sub_index) if term_repr is None else term_repr
 
+        # Sub index is used to identify different values that are generated from the same instruction.
+        # super_term is the representation of the general term
+        self.super_term: str = self.repr if sub_index is None else term_to_string(instr, operands, None)
+
     def __str__(self):
+        return self.repr
+
+    def __repr__(self):
         return self.repr
 
 
@@ -621,6 +629,7 @@ class AbstractConfiguration:
         self.pc = None
         self.opts = None
         self.max_stack_size = None
+        self.global_count: typing.Optional[int] = None
         self.term_factory: typing.Optional[TermFactory] = None
 
     def init_stack_size(self, block: typing.List[binary.Instruction]):
@@ -650,7 +659,19 @@ class AbstractConfiguration:
 
         return init_stack, max_stack
 
+    def update_store(self) -> None:
+        """
+        Initializes a new set of global values after call and stores it in the store global list. It is used after
+        simulating symbolic calls, as we don't know the exact contents of globals afterwards
+        """
+        symbolic_globals = [global_value if not global_value.mut else
+                            GlobalInstance(Value.new(convention.symbolic, f"global_{self.global_count}_{i}"), global_value.mut)
+                            for i, global_value in enumerate(self.store.global_list)]
+        self.global_count += 1
+        self.store.global_list = symbolic_globals
+
     def initialize_store(self):
+        self.global_count = 1
         self.store = copy.deepcopy(self.initial_store)
 
         # Change store global values by generic values
@@ -659,7 +680,6 @@ class AbstractConfiguration:
                             GlobalInstance(Value.new(convention.symbolic, f"global_{i}"), global_value.mut)
                             for i, global_value in enumerate(self.store.global_list)]
         self.store.global_list = symbolic_globals
-
 
     def initialize_stack(self, block: typing.List[binary.Instruction]):
         stack_size, max_stack_size = self.init_stack_size(block)
@@ -773,12 +793,7 @@ class AbstractConfiguration:
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
         final_locals = self.frame.local_list
-        global_accesses= [var_access for var_access in var_accesses if "global" in var_access[1].instr.name]
-        current_ops = {}
-        new_index_per_instr = collections.defaultdict(lambda: 0)
-        # print("Stack",operands_from_stack(self.stack, current_ops, new_index_per_instr, initial_stack))
-        # print("Var accesses", deps_from_var_accesses(var_accesses, current_ops))
-        # print("Mem accesses", deps_from_mem_accesses(memory_accesses, current_ops))
+        global_accesses = [var_access for var_access in var_accesses if "global" in var_access[1].instr.name]
 
         if interesting_block(var_accesses):
             print("")
@@ -845,9 +860,9 @@ def term_from_func(config: AbstractConfiguration, i: binary.Instruction) -> Term
 
 
 def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
-                   repeated_values: typing.Set[str], op) -> str:
+                   repeated_values: typing.Set[str]) -> str:
     # First we obtain the stack vars associated to all input values
-    input_values = [op(input_term, current_ops, new_index_per_instr, initial_stack, repeated_values) for input_term in term.ops]
+    input_values = [operands_from_value_no_locals(input_term, current_ops, new_index_per_instr, initial_stack, repeated_values) for input_term in term.ops]
     opcode_name = term.instr.name
     term_var = f"s({sum(new_index_per_instr.values())})" if 'tee' not in opcode_name else input_values[0]
     term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
@@ -873,18 +888,18 @@ def introduce_variable(variable: str, current_ops: typing.Dict, new_index_per_in
     return term_var
 
 
-def introduce_local(local_name: str, current_ops: typing.Dict, new_index_per_instr: typing.Dict) -> str:
-    opcode = 0x20
+def introduce_get_register(var_name: str, register_type: str, current_ops: typing.Dict, new_index_per_instr: typing.Dict) -> str:
+    opcode = 0x20 if register_type == "local" else 0x23
     opcode_info = instruction.opcode_info[opcode]
     opcode_name = opcode_info["name"]
     opcode_info = instruction.opcode_info[opcode]
-    term_var = f"s({sum(new_index_per_instr.values())})"
     term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_info["name"],
-                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [local_name], 'push': False,
+                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [var_name], 'push': False,
                  "commutative": False, 'storage': False, 'gas': 1, 'size': 1}
-    current_ops[local_name] = term_info
+    current_ops[var_name] = term_info
     new_index_per_instr[opcode_name] += 1
-    return term_var
+    return var_name
+
 
 def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_instr: typing.Dict, constant) -> str:
     opcode_info = instruction.opcode_info[opcode]
@@ -897,24 +912,26 @@ def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_inst
     return term_var
 
 
-def operands_from_value(val: Value, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
-                        initial_stack: typing.List[str], repeated_values: typing.Set[str]):
-    value = val.val()
-    value_rep = str(value)
-    if value_rep in initial_stack:
-        return value_rep
-    elif value_rep in current_ops:
-        repeated_values.add(value_rep)
-        return current_ops[value_rep]['outpt_sk'][0]
-    else:
-        if val.type == convention.term:
-            return introduce_term(value, current_ops, new_index_per_instr, initial_stack, repeated_values,
-                                  operands_from_value)
-        elif val.type == convention.symbolic:
-            return introduce_variable(value, current_ops, new_index_per_instr)
-        else:
-            opcode = val.opcode()
-            return introduce_constant(opcode, current_ops, new_index_per_instr, value)
+def introduce_call(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
+                   repeated_values: typing.Set[str]) -> None:
+    """
+    Introduce call takes into account that a call access can return an arbitrary number of ops. Hence, it introduces
+    the instruction once for every subterm. This could be extended to other opcodes that generate more than
+    one value as a result.
+    HACK: introduce each subterm as a instruction with output_sk[0] as their associated term
+    """
+    # First we obtain the stack vars associated to all input values
+    input_values = [operands_from_value_no_locals(input_term, current_ops, new_index_per_instr, initial_stack, repeated_values) for input_term in term.ops]
+    opcode_name = term.instr.name
+    out_arity = term.instr.out_arity
+    initial_index = sum(new_index_per_instr.values())
+    outpt_sk = [f"s({initial_index + i})" for i in range(out_arity)]
+    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
+                 "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
+                 "outpt_sk": outpt_sk, 'push': False, "commutative": term.instr.comm,
+                 'storage': any(instr in opcode_name for instr in ["call", "store"]), 'gas': 1, 'size': 1}
+    current_ops[str(term)] = term_info
+    new_index_per_instr[opcode_name] += 1
 
 
 # Change from the function above: no instruction is generated for loading locals
@@ -924,15 +941,18 @@ def operands_from_value_no_locals(val: Value, current_ops: typing.Dict, new_inde
     value_rep = str(value)
     if value_rep in initial_stack:
         return value_rep
+    # If we have a term with a subindex, we just return the associated super term value
+    elif type(val) == Term and value.sub_index is not None:
+        return current_ops[value.super_term]['outpt_sk'][value.sub_index]
     elif value_rep in current_ops:
         return current_ops[value_rep]['outpt_sk'][0]
     else:
         if val.type == convention.term:
-            return introduce_term(value, current_ops, new_index_per_instr, initial_stack, repeated_values,
-                                  operands_from_value_no_locals)
+            return introduce_term(value, current_ops, new_index_per_instr, initial_stack, repeated_values) if 'call' not in value.instr.name else (
+                introduce_call(value, current_ops, new_index_per_instr, initial_stack, repeated_values))
         elif val.type == convention.symbolic:
             repeated_values.add(value_rep)
-            return introduce_variable(value, current_ops, new_index_per_instr) if "global" in value_rep else value_rep
+            return value_rep
         else:
             opcode = val.opcode()
             return introduce_constant(opcode, current_ops, new_index_per_instr, value)
@@ -989,36 +1009,6 @@ def get_instruction(arg_num: int):
     o.args = [binary.LocalIndex(arg_num)]
     return o
 
-
-def tee_set_dependences(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict,
-                        new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
-                        repeated_values: typing.Set[str]):
-    deps = []
-    for i, (ini_local, final_local) in enumerate(zip(initial_locals, final_locals)):
-        if str(ini_local) != str(final_local):
-            # Include set instruction (always possible)
-            set_value = Value.from_term(Term(set_instruction(i), [final_local]))
-            operands_from_value(set_value, current_ops, new_index_per_instr, initial_stack, repeated_values)
-            set_instr = current_ops[str(set_value)]
-
-            # Finally, if the initial value in the variables is accessed, we add a dependency among the instructions
-            if str(ini_local) in current_ops:
-                deps.append((current_ops[str(ini_local)]['id'], set_instr['id']))
-
-            if str(final_local) in repeated_values:
-                tee_value = Value.from_term(Term(tee_instruction(i), [final_local]))
-                operands_from_value(tee_value, current_ops, new_index_per_instr, initial_stack,
-                                    repeated_values)
-
-                # Annotate that both instructions are related
-                tee_instr = current_ops[str(tee_value)]
-                set_instr["alternative"] = tee_instr['id']
-                tee_instr["alternative"] = set_instr['id']
-
-                # Same as before for tee
-                if str(ini_local) in current_ops:
-                    deps.append((current_ops[str(ini_local)]['id'], tee_instr['id']))
-    return deps
 
 def mem_access_range(mem_access: Term):
     effective_address = mem_access.ops[0].val() + mem_access.instr.args[0] if mem_access.ops[0].type != convention.term and mem_access.ops[0].type != convention.symbolic else (mem_access.ops[0].val(), mem_access.instr.args[0])
@@ -1109,10 +1099,14 @@ def state_from_local_variables(initial_locals: typing.List[Value], final_locals:
         if str(ini_local) != str(final_local):
             if str(final_local) not in current_ops:
                 op(final_local, current_ops, new_index_per_instr, initial_stack, repeated_values)
-            modified_locals.append((str(ini_local), current_ops[str(final_local)]['outpt_sk'][0]))
+            final_local_instr = current_ops.get(str(final_local), None)
+            # Final local could contain a value in the init stack or a value from other local. Hence, it may not have
+            # an instruction associated
+            # TODO: link each final value to the corresponding var, as call instructions might return multiple stack vars
+            modified_locals.append((str(ini_local), final_local_instr['outpt_sk'][0] if final_local_instr is not None else str(final_local)))
         # Locals that contain values that are used but are not modified are considered directly as UF
         elif str(ini_local) in repeated_values:
-            introduce_local(str(ini_local), current_ops, new_index_per_instr)
+            introduce_get_register(str(ini_local), "local", current_ops, new_index_per_instr)
     return modified_locals
 
 
@@ -1133,9 +1127,11 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, 
     current_ops = {}
     used_values = set()
     new_index_per_instr = collections.defaultdict(lambda: 0)
+    # First we extract values from call instructions to ensure they are created when dealing with its subterms
+    # TODO: fix so that it can be done in any order
+    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
     tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
     operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
-    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
     operands_from_accesses(global_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
 
     combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
@@ -1398,6 +1394,8 @@ class ArithmeticLogicUnit:
     @staticmethod
     def call_symbolic(config: AbstractConfiguration, i: binary.Instruction):
         instr = ArithmeticLogicUnit.instr_from_call(config, i)
+        # We need to update the store to initialize new globals
+        config.update_store()
         return symbolic_func(config, instr)
 
     @staticmethod
@@ -1432,6 +1430,8 @@ class ArithmeticLogicUnit:
     @staticmethod
     def call_indirect_symbolic(config: AbstractConfiguration, i: binary.Instruction):
         instr = ArithmeticLogicUnit.instr_from_call_indirect(config, i)
+        # We need to update the store to initialize new globals
+        config.update_store()
         return symbolic_func(config, instr)
 
     @staticmethod
