@@ -219,16 +219,62 @@ class TermFactory:
         self._terms_created: typing.Dict = {}
 
     def term(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]],
-             sub_index: typing.Optional[int] = None):
+             sub_index: typing.Optional[int] = None) -> typing.Tuple['Term', str]:
         term_repr = term_to_string(instr, operands, sub_index)
         if term_repr in self._terms_created:
-            return self._terms_created[term_repr]
+            return self._terms_created[term_repr], term_repr
         new_term = Term(instr, operands, sub_index, term_repr)
         self._terms_created[term_repr] = new_term
-        return new_term
+        return new_term, term_repr
 
-    def created(self):
-        return len(self._terms_created)
+    def created(self) -> typing.Dict:
+        return self._terms_created
+
+
+class StackVarFactory:
+    """
+    Class to generate the stack vars associated to terms
+    """
+
+    def __init__(self):
+        self._value2var: typing.Dict[str, typing.List[str]] = {}
+        self._cont = 0
+        self._accessed: typing.Set[str] = set()
+
+    def stack_var(self, term_repr: str) -> typing.List[str]:
+        """
+        Returns the stack var associated to term_repr, assuming if it corresponds to a term then it has been
+        assigned previously. Also marks an access has been made
+        """
+        self._accessed.add(term_repr)
+        stack_repr = self._value2var.get(term_repr, None)
+        if stack_repr is None:
+            self._value2var[term_repr] = [term_repr]
+            return [term_repr]
+        return stack_repr
+
+    def assign_stack_var(self, term_repr: str) -> str:
+        """
+        Assigns an arbitrary stack var to term_repr. Checks if there are repetitions
+        """
+        var_term = self._value2var.get(term_repr, None)
+        if var_term is None:
+            var_term = [f"s({self._cont})"]
+            self._value2var[term_repr] = var_term
+            self._cont += 1
+        return var_term[0]
+
+    def has_been_accessed(self, term_repr: str) -> bool:
+        return term_repr in self._accessed
+
+    def set_term(self, term_repr: str, var_list: typing.List[str]) -> None:
+        """
+        Assigns var_list to term_repr term
+        """
+        self._value2var[term_repr] = var_list
+
+    def vars(self) -> typing.List[str]:
+        return [self._value2var[term_repr][0] for term_repr in self._accessed if len(self._value2var[term_repr]) == 1]
 
 
 class Result:
@@ -631,6 +677,7 @@ class AbstractConfiguration:
         self.max_stack_size = None
         self.global_count: typing.Optional[int] = None
         self.term_factory: typing.Optional[TermFactory] = None
+        self.term2var: typing.Optional[StackVarFactory] = None
 
     def init_stack_size(self, block: typing.List[binary.Instruction]):
         current_stack = 0
@@ -697,6 +744,7 @@ class AbstractConfiguration:
         self.pc = 0
         self.term_factory = TermFactory()
         self.opts: option.Option = option.Option()
+        self.term2var = StackVarFactory()
 
     def get_label(self, i: int) -> Label:
         l = self.stack.len()
@@ -801,9 +849,9 @@ class AbstractConfiguration:
             print('\n'.join([str(i) for i in basic_block]))
             print("")
             print("")
-            json_sat = sfs_with_local_changes(initial_stack, self.stack, memory_accesses, global_accesses,
-                                              call_accesses, basic_block, initial_locals, final_locals, self.max_stack_size)
-            json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"], json_sat["dependencies"])
+            json_sat = sfs_with_local_changes(initial_stack, self.stack, memory_accesses, global_accesses, call_accesses,
+                                              basic_block, initial_locals, final_locals, self.max_stack_size, self.term2var)
+            # json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"], json_sat["dependencies"])
             store_json(json_sat, block_name)
 
             # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
@@ -838,58 +886,87 @@ def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> Term:
     # First we remove from the stack the elements that have been consumed
     operands = [config.stack.pop() for _ in range(i.in_arity)]
 
-    result = config.term_factory.term(i, operands)
+    result, result_repr = config.term_factory.term(i, operands)
     ar = i.out_arity
     # Then we introduce the values in the stack
     # If ar > 1, then we create a term per introduced value in the stack
     if i.out_arity > 1:
+        output_sk = []
         while ar > 0:
-            config.stack.append(Value.from_term(config.term_factory.term(i, operands, ar)))
+            # We introduce a stack var for each subterm and then the list of stack vars for the super term
+            subterm, subterm_repr = config.term_factory.term(i, operands, ar)
+            term_value = Value.from_term(subterm)
+            config.stack.append(term_value)
+            output_sk.insert(0, config.term2var.assign_stack_var(subterm_repr))
             ar -= 1
+        # Assign the list of super terms
+        config.term2var.set_term(result_repr, list(reversed(output_sk)))
+
     elif i.out_arity == 1:
         config.stack.append(Value.from_term(result))
+        config.term2var.assign_stack_var(result_repr)
     return result
 
 
 def term_from_func(config: AbstractConfiguration, i: binary.Instruction) -> Term:
     # First we remove from the stack the elements that have been consumed
     operands = [elem for elem in config.stack.data[-1:-i.in_arity - 1:-1]]
-
-    result = config.term_factory.term(i, operands)
+    result, _ = config.term_factory.term(i, operands)
     return result
 
 
-def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
-                   repeated_values: typing.Set[str]) -> str:
+def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
+                   stack_var_factory: StackVarFactory) -> str:
     # First we obtain the stack vars associated to all input values
-    input_values = [operands_from_value_no_locals(input_term, current_ops, new_index_per_instr, initial_stack, repeated_values) for input_term in term.ops]
+    input_values = [instruction_from_value(input_term, current_ops, new_index_per_instr, stack_var_factory)
+                    for input_term in term.ops]
     opcode_name = term.instr.name
-    term_var = f"s({sum(new_index_per_instr.values())})" if 'tee' not in opcode_name else input_values[0]
+    term_repr = term.repr
+    term_vars = stack_var_factory.stack_var(term_repr)
     term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
                  "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
-                 "outpt_sk": [] if term.instr.out_arity == 0 else [term_var], 'push': False, "commutative": term.instr.comm,
+                 "outpt_sk": term_vars, 'push': False, "commutative": term.instr.comm,
                  'storage': any(instr in opcode_name for instr in ["call", "store"]), 'gas': 1, 'size': 1}
-    current_ops[str(term)] = term_info
+    current_ops[term_repr] = term_info
     new_index_per_instr[opcode_name] += 1
-    return term_var
+    return term_vars[0]
 
 
-def introduce_variable(variable: str, current_ops: typing.Dict, new_index_per_instr: typing.Dict) -> str:
-    var_name, _ = variable.split("_")
-    opcode = 0x23 if var_name == "global" else 0x20
+def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_instr: typing.Dict, constant,
+                       stack_var_factory: StackVarFactory) -> str:
     opcode_info = instruction.opcode_info[opcode]
-    opcode_name = opcode_info["name"]
-    term_var = f"s({sum(new_index_per_instr.values())})"
-    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
-                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var], 'push': False,
-                 "commutative": False, 'storage': False, 'value': variable,  'gas': 1, 'size': 1}
-    current_ops[variable] = term_info
-    new_index_per_instr[opcode_name] += 1
+    term_repr = str(constant)
+    term_var = stack_var_factory.assign_stack_var(term_repr)
+    term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "disasm": opcode_info["name"],
+                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var], 'push': True,
+                 "commutative": False, 'storage': False, 'value': constant, 'gas': 1, 'size': 1}
+    current_ops[term_repr] = term_info
+    new_index_per_instr['PUSH'] += 1
     return term_var
 
 
-def introduce_get_register(var_name: str, register_type: str, current_ops: typing.Dict, new_index_per_instr: typing.Dict) -> str:
-    opcode = 0x20 if register_type == "local" else 0x23
+# Change from the function above: no instruction is generated for loading locals
+def instruction_from_value(val: Value, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
+                           stack_var_factory: StackVarFactory):
+    value = val.val()
+    value_rep = str(value)
+    # If it is a subterm from a term, we just return the first stack var and don't introduce any op.
+    # IMPORTANT: these terms are guaranteed to correspond exactly to one stack var
+    if stack_var_factory.has_been_accessed(value_rep) or (type(val) == Term and value.instr.sub_index is not None):
+        return stack_var_factory.stack_var(value_rep)[0]
+    else:
+        if val.type == convention.term:
+            return introduce_term(value, current_ops, new_index_per_instr, stack_var_factory)
+        elif val.type == convention.symbolic:
+            # For symbolic, we just returns the corresponding stack var (it only has one)
+            return stack_var_factory.stack_var(value_rep)[0]
+        else:
+            opcode = val.opcode()
+            return introduce_constant(opcode, current_ops, new_index_per_instr, value, stack_var_factory)
+
+
+def introduce_local_register(var_name: str, current_ops: typing.Dict, new_index_per_instr: typing.Dict) -> str:
+    opcode = 0x20
     opcode_info = instruction.opcode_info[opcode]
     opcode_name = opcode_info["name"]
     opcode_info = instruction.opcode_info[opcode]
@@ -901,77 +978,44 @@ def introduce_get_register(var_name: str, register_type: str, current_ops: typin
     return var_name
 
 
-def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_instr: typing.Dict, constant) -> str:
-    opcode_info = instruction.opcode_info[opcode]
-    term_var = f"s({sum(new_index_per_instr.values())})"
-    term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "disasm": opcode_info["name"],
-                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var], 'push': True,
-                 "commutative": False, 'storage': False, 'value': constant, 'gas': 1, 'size': 1}
-    current_ops[str(constant)] = term_info
-    new_index_per_instr['PUSH'] += 1
-    return term_var
+def access_representation(access: int, term: Term) -> str:
+    return f"{term}_{access}"
 
 
-def introduce_call(term: Term, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
-                   repeated_values: typing.Set[str]) -> None:
+def introduce_access(term: Term, access: int, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
+                     stack_var_factory: StackVarFactory) -> None:
     """
-    Introduce call takes into account that a call access can return an arbitrary number of ops. Hence, it introduces
-    the instruction once for every subterm. This could be extended to other opcodes that generate more than
-    one value as a result.
-    HACK: introduce each subterm as a instruction with output_sk[0] as their associated term
+    Assumes the stack_var_factory already contains all the stack vars associated to its subterms.
+    Also, to avoid two accesses with the same arguments to be assigned only once, we add the position in the sequence in
+    which it was accessed
     """
-    # First we obtain the stack vars associated to all input values
-    input_values = [operands_from_value_no_locals(input_term, current_ops, new_index_per_instr, initial_stack, repeated_values) for input_term in term.ops]
+    # First we obtain the stack vars associated to all input values. They are guaranteed to have only one term
+    input_values = [instruction_from_value(input_term, current_ops, new_index_per_instr, stack_var_factory)
+                    for input_term in term.ops]
     opcode_name = term.instr.name
-    out_arity = term.instr.out_arity
-    initial_index = sum(new_index_per_instr.values())
-    outpt_sk = [f"s({initial_index + i})" for i in range(out_arity)]
-    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
+    term_repr = term.repr
+    outpt_sk = stack_var_factory.stack_var(term_repr)
+    term_info = {"id": f"{opcode_name}_{access}", "disasm": opcode_name,
                  "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": outpt_sk, 'push': False, "commutative": term.instr.comm,
                  'storage': any(instr in opcode_name for instr in ["call", "store"]), 'gas': 1, 'size': 1}
-    current_ops[str(term)] = term_info
+    current_ops[access_representation(access, term)] = term_info
     new_index_per_instr[opcode_name] += 1
 
 
-# Change from the function above: no instruction is generated for loading locals
-def operands_from_value_no_locals(val: Value, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
-                                  initial_stack: typing.List[str], repeated_values: typing.Set[str]):
-    value = val.val()
-    value_rep = str(value)
-    if value_rep in initial_stack:
-        return value_rep
-    # If we have a term with a subindex, we just return the associated super term value
-    elif type(val) == Term and value.sub_index is not None:
-        return current_ops[value.super_term]['outpt_sk'][value.sub_index]
-    elif value_rep in current_ops:
-        return current_ops[value_rep]['outpt_sk'][0]
-    else:
-        if val.type == convention.term:
-            return introduce_term(value, current_ops, new_index_per_instr, initial_stack, repeated_values) if 'call' not in value.instr.name else (
-                introduce_call(value, current_ops, new_index_per_instr, initial_stack, repeated_values))
-        elif val.type == convention.symbolic:
-            repeated_values.add(value_rep)
-            return value_rep
-        else:
-            opcode = val.opcode()
-            return introduce_constant(opcode, current_ops, new_index_per_instr, value)
-
-
-def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
-                        repeated_values: typing.Set[str], op: typing.Callable):
+def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
+                        stack_var_factory: StackVarFactory):
     symbolic_stack = []
     for val in stack.data[::-1]:
-        stack_term = op(val, current_ops, new_index_per_instr, initial_stack, repeated_values)
+        stack_term = instruction_from_value(val, current_ops, new_index_per_instr, stack_var_factory)
         symbolic_stack.append(stack_term)
     return symbolic_stack
 
 
 def operands_from_accesses(accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict,
-                           new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
-                           repeated_values: typing.Set[str], op:typing.Callable):
-    for _, val in accesses:
-        op(Value.from_term(val), current_ops, new_index_per_instr, initial_stack, repeated_values)
+                           new_index_per_instr: typing.Dict, stack_var_factory: StackVarFactory):
+    for pos, val in accesses:
+        introduce_access(val, pos, current_ops, new_index_per_instr, stack_var_factory)
 
 
 def set_instruction(arg_num: int):
@@ -1077,37 +1121,45 @@ def deps_from_var_accesses(var_accesses: typing.List[typing.Tuple[int, Term]], c
     dependencies = [(i, j+i+1) for i, (_, var_access1) in enumerate(var_accesses)
                     for j, (_, var_access2) in enumerate(var_accesses[i+1:])
                     if are_dependent_var_access(var_access1, var_access2)]
-    return [(current_ops[str(var_accesses[i][1])]['id'], current_ops[str(var_accesses[j][1])]['id']) for i, j in simplify_dependencies(dependencies)]
+    return [(current_ops[access_representation(*var_accesses[i])]['id'], current_ops[access_representation(*var_accesses[j])]['id'])
+            for i, j in simplify_dependencies(dependencies)]
 
 
 def deps_from_mem_accesses(mem_accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict) -> typing.List[typing.Tuple[str, str]]:
     dependencies = [(i, j+i+1) for i, (_, mem_access1) in enumerate(mem_accesses)
                     for j, (_, mem_access2) in enumerate(mem_accesses[i+1:])
                     if are_dependent_mem_access(mem_access1, mem_access2)]
-    return [(current_ops[str(mem_accesses[i][1])]['id'], current_ops[str(mem_accesses[j][1])]['id']) for i, j in simplify_dependencies(dependencies)]
+    return [(current_ops[access_representation(*mem_accesses[i])]['id'], current_ops[access_representation(*mem_accesses[j])]['id'])
+            for i, j in simplify_dependencies(dependencies)]
 
 
 def state_from_local_variables(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict,
-                               new_index_per_instr: typing.Dict, initial_stack: typing.List[str],
-                               repeated_values: typing.Set[str], op: typing.Callable):
+                               new_index_per_instr: typing.Dict, stack_var_factory: StackVarFactory):
     """
     Returns a list of tuples representing the local variables. Each tuple contains the initial variable and final
     variable of a local, and only those locals in which they differ are included.
     """
     modified_locals = []
     for i, (ini_local, final_local) in enumerate(zip(initial_locals, final_locals)):
-        if str(ini_local) != str(final_local):
-            if str(final_local) not in current_ops:
-                op(final_local, current_ops, new_index_per_instr, initial_stack, repeated_values)
-            final_local_instr = current_ops.get(str(final_local), None)
+        ini_local_repr, final_local_repr = str(ini_local), str(final_local)
+        if ini_local_repr != final_local_repr:
+            final_local_var = instruction_from_value(final_local, current_ops, new_index_per_instr, stack_var_factory)
+
             # Final local could contain a value in the init stack or a value from other local. Hence, it may not have
             # an instruction associated
-            # TODO: link each final value to the corresponding var, as call instructions might return multiple stack vars
-            modified_locals.append((str(ini_local), final_local_instr['outpt_sk'][0] if final_local_instr is not None else str(final_local)))
-        # Locals that contain values that are used but are not modified are considered directly as UF
-        elif str(ini_local) in repeated_values:
-            introduce_get_register(str(ini_local), "local", current_ops, new_index_per_instr)
+            modified_locals.append((stack_var_factory.stack_var(ini_local_repr)[0], final_local_var))
     return modified_locals
+
+
+def local_loads(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict,
+                new_index_per_instr: typing.Dict, stack_var_factory: StackVarFactory):
+    """
+    Introduces a load instruction for each local that is accessed but not modified
+    """
+    for i, (ini_local, final_local) in enumerate(zip(initial_locals, final_locals)):
+        ini_local_repr, final_local_repr = str(ini_local), str(final_local)
+        if ini_local_repr == final_local_repr and stack_var_factory.has_been_accessed(ini_local_repr):
+            introduce_local_register(final_local_repr, current_ops, new_index_per_instr)
 
 
 def deps_from_modified_locals(initial_locals: typing.List[Value], final_locals: typing.List[Value], current_ops: typing.Dict):
@@ -1123,16 +1175,22 @@ def initial_length(instrs: typing.List[binary.Instruction]):
 def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, memory_accesses: typing.List[typing.Tuple[int, Term]],
                            global_accesses: typing.List[typing.Tuple[int, Term]],
                            call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction],
-                           initial_locals: typing.List[Value], final_locals: typing.List[Value], max_sk_sz: int) -> typing.Dict:
+                           initial_locals: typing.List[Value], final_locals: typing.List[Value], max_sk_sz: int,
+                           stack_var_factory: StackVarFactory) -> typing.Dict:
     current_ops = {}
-    used_values = set()
     new_index_per_instr = collections.defaultdict(lambda: 0)
+
+    # We access each value in the initial stack to add them to the list of stack variables that are accessed
+    for stack_var in initial_stack:
+        stack_var_factory.stack_var(stack_var)
+
     # First we extract values from call instructions to ensure they are created when dealing with its subterms
-    # TODO: fix so that it can be done in any order
-    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
-    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
-    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
-    operands_from_accesses(global_accesses, current_ops, new_index_per_instr, initial_stack, used_values, operands_from_value_no_locals)
+    tgt_stack = operands_from_stack(final_stack, current_ops, new_index_per_instr, stack_var_factory)
+
+    # TODO: filter repeated accesses
+    operands_from_accesses(call_accesses, current_ops, new_index_per_instr, stack_var_factory)
+    operands_from_accesses(memory_accesses, current_ops, new_index_per_instr, stack_var_factory)
+    operands_from_accesses(global_accesses, current_ops, new_index_per_instr, stack_var_factory)
 
     combined_accesses = sorted([*memory_accesses, *call_accesses], key=lambda kv: kv[0])
     mem_deps = deps_from_mem_accesses(combined_accesses, current_ops)
@@ -1142,15 +1200,11 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, 
                    if "call" not in acc1 or "call" not in acc2]
 
     local_changes = state_from_local_variables(initial_locals, final_locals, current_ops, new_index_per_instr,
-                                               initial_stack, used_values, operands_from_value_no_locals)
-    local_changes_ini = [pair[0] for pair in local_changes]
+                                               stack_var_factory)
+    local_loads(initial_locals, final_locals, current_ops, new_index_per_instr, stack_var_factory)
 
     # Include vars from the instructions, initial stack and initial locals
-    used_vars = set(instr['outpt_sk'][0] for instr in current_ops.values() if len(instr['outpt_sk']) > 0)
-    used_vars.update((str(elem) for elem in initial_stack))
-    used_vars.update((str(ini_local) for ini_local, final_local in zip(initial_locals, final_locals)
-                      if str(ini_local) in local_changes_ini))
-
+    used_vars = stack_var_factory.vars()
     b0 = initial_length(instrs)
     bs = max_sk_sz
     # Number of elements in current ops
