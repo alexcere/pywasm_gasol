@@ -170,14 +170,15 @@ class Value:
 
 
 def term_to_string(instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]],
-                   sub_index: typing.Optional[int] = None) -> str:
+                   sub_indexes: typing.Optional[typing.List[int]] = None) -> str:
     """
     String that represents a term unequivocally
 
     :param instr: instruction to represent
     :param operands: list of terms/values that are the operands of the operation. Assume __str__ is defined
-    :param sub_index: the subindex is used to identify different subterms if a term represents different values.
-        For instance, if call(a,b) returns two values in the stack, then we could create terms call_1(a,b) and call_2(a,b)
+    :param sub_indexes: the subindexes is used to identify different subterms if a term represents different values.
+        For instance, if call(a,b) returns two values in the stack, then we could create terms call_1(a,b) and call_2(a,b).
+        Also it can be to identify different instructions that are called with the same args. Hence, it is a list
     :return: the str representation
     """
     if instr.comm:
@@ -185,7 +186,7 @@ def term_to_string(instr: binary.Instruction, operands: typing.List[typing.Union
     else:
         joined_operands = f"({','.join(map(str, operands))})" if operands else ""
 
-    sub_index = f"_{sub_index}" if sub_index is not None else ""
+    sub_index = f"_{'_'.join(map(str, sub_indexes))}" if sub_indexes is not None else ""
     return f"{instr}{sub_index}{joined_operands}"
 
 
@@ -193,16 +194,16 @@ class Term:
     # A term consists of either a value or an instruction applied to other terms.
 
     def __init__(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]],
-                 sub_index: typing.Optional[int] = None, term_repr: str = None):
+                 sub_indexes: typing.Optional[typing.List[int]] = None, term_repr: str = None):
         # We allow passing the representation as an argument to allow repeating computations
         self.instr: binary.Instruction = instr
         self.ops: typing.List[typing.Union['Term', Value]] = operands
-        self.sub_index: int = sub_index
-        self.repr: str = term_to_string(instr, operands, sub_index) if term_repr is None else term_repr
+        self.sub_indexes: typing.Optional[typing.List[int]] = sub_indexes
+        self.repr: str = term_to_string(instr, operands, sub_indexes) if term_repr is None else term_repr
 
         # Sub index is used to identify different values that are generated from the same instruction.
         # super_term is the representation of the general term
-        self.super_term: str = self.repr if sub_index is None else term_to_string(instr, operands, None)
+        self.super_term: str = self.repr if sub_indexes is None else term_to_string(instr, operands, None)
 
     def __str__(self):
         return self.repr
@@ -219,11 +220,11 @@ class TermFactory:
         self._terms_created: typing.Dict = {}
 
     def term(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]],
-             sub_index: typing.Optional[int] = None) -> typing.Tuple['Term', str]:
-        term_repr = term_to_string(instr, operands, sub_index)
+             sub_indexes: typing.Optional[typing.List[int]] = None) -> typing.Tuple['Term', str]:
+        term_repr = term_to_string(instr, operands, sub_indexes)
         if term_repr in self._terms_created:
             return self._terms_created[term_repr], term_repr
-        new_term = Term(instr, operands, sub_index, term_repr)
+        new_term = Term(instr, operands, sub_indexes, term_repr)
         self._terms_created[term_repr] = new_term
         return new_term, term_repr
 
@@ -881,12 +882,13 @@ def interesting_block(var_accesses: typing.List[typing.Tuple[int, Term]]) -> boo
 # ======================================================================================================================
 
 
-def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> Term:
+def symbolic_func(config: AbstractConfiguration, i: binary.Instruction, pos_sequence: int = None) -> Term:
 
     # First we remove from the stack the elements that have been consumed
     operands = [config.stack.pop() for _ in range(i.in_arity)]
 
-    result, result_repr = config.term_factory.term(i, operands)
+    sub_indexes = [pos_sequence] if pos_sequence is not None else None
+    result, result_repr = config.term_factory.term(i, operands, sub_indexes)
     ar = i.out_arity
     # Then we introduce the values in the stack
     # If ar > 1, then we create a term per introduced value in the stack
@@ -894,7 +896,8 @@ def symbolic_func(config: AbstractConfiguration, i: binary.Instruction) -> Term:
         output_sk = []
         while ar > 0:
             # We introduce a stack var for each subterm and then the list of stack vars for the super term
-            subterm, subterm_repr = config.term_factory.term(i, operands, ar)
+            sub_indexes = [ar] if pos_sequence is None else [ar, pos_sequence]
+            subterm, subterm_repr = config.term_factory.term(i, operands, sub_indexes)
             term_value = Value.from_term(subterm)
             config.stack.append(term_value)
             output_sk.insert(0, config.term2var.assign_stack_var(subterm_repr))
@@ -952,7 +955,7 @@ def instruction_from_value(val: Value, current_ops: typing.Dict, new_index_per_i
     value_rep = str(value)
     # If it is a subterm from a term, we just return the first stack var and don't introduce any op.
     # IMPORTANT: these terms are guaranteed to correspond exactly to one stack var
-    if stack_var_factory.has_been_accessed(value_rep) or (type(val) == Term and value.instr.sub_index is not None):
+    if stack_var_factory.has_been_accessed(value_rep) or (type(val) == Term and value.instr.sub_indexes is not None):
         return stack_var_factory.stack_var(value_rep)[0]
     else:
         if val.type == convention.term:
@@ -994,7 +997,7 @@ def introduce_access(term: Term, access: int, current_ops: typing.Dict, new_inde
                     for input_term in term.ops]
     opcode_name = term.instr.name
     term_repr = term.repr
-    outpt_sk = stack_var_factory.stack_var(term_repr)
+    outpt_sk = stack_var_factory.stack_var(term_repr) if term.instr.out_arity > 0 else []
     term_info = {"id": f"{opcode_name}_{access}", "disasm": opcode_name,
                  "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": outpt_sk, 'push': False, "commutative": term.instr.comm,
@@ -1251,7 +1254,7 @@ class ArithmeticLogicUnit:
             if i.opcode == instruction.nop:
                 pass
             elif i.opcode == instruction.call:
-                call_expr = ArithmeticLogicUnit.call_symbolic(config, i)
+                call_expr = ArithmeticLogicUnit.call_symbolic(config, i, idx)
                 call_accesses.append((idx, call_expr))
             # elif i.opcode == instruction.call_indirect:
             #     call_expr = ArithmeticLogicUnit.call_indirect_symbolic(config, i)
@@ -1264,7 +1267,7 @@ class ArithmeticLogicUnit:
             var_accesses.append((idx, var_expr))
 
         elif i.type == instruction.InstructionType.memory:
-            mem_expr = symbolic_func(config, i)
+            mem_expr = symbolic_func(config, i, idx)
             memory_accesses.append((idx, mem_expr))
         else:
             # Either numeric or parametric instruction. We only try executing if all the values in the stack
@@ -1446,11 +1449,11 @@ class ArithmeticLogicUnit:
         return instr
 
     @staticmethod
-    def call_symbolic(config: AbstractConfiguration, i: binary.Instruction):
+    def call_symbolic(config: AbstractConfiguration, i: binary.Instruction, idx: int):
         instr = ArithmeticLogicUnit.instr_from_call(config, i)
         # We need to update the store to initialize new globals
         config.update_store()
-        return symbolic_func(config, instr)
+        return symbolic_func(config, instr, idx)
 
     @staticmethod
     def call_indirect(config: Configuration, i: binary.Instruction):
