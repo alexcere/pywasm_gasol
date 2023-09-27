@@ -717,6 +717,7 @@ class AbstractConfiguration:
                             for i, global_value in enumerate(self.store.global_list)]
         self.global_count += 1
         self.store.global_list = symbolic_globals
+        print("STORE", *[str(store_val.value) for store_val in self.store.global_list])
 
     def initialize_store(self):
         self.global_count = 1
@@ -804,13 +805,13 @@ class AbstractConfiguration:
         print('\n'.join(str(elem) for elem in stack.data[::-1]))
         print("")
         print("Memory access:")
-        print('\n'.join([f'({idx}, {str(term)})' for idx, term in memory_accesses]))
+        print('\n'.join([f'({idx}, {str(term)}, {str(val)})' for idx, term, val in memory_accesses]))
         print("")
         print("Variable access:")
-        print('\n'.join([f'({idx}, {str(term)})' for idx, term in var_accesses]))
+        print('\n'.join([f'({idx}, {str(term)}, {str(val)})' for idx, term, val in var_accesses]))
         print("")
         print("Call access:")
-        print('\n'.join([f'({idx}, {str(term)})' for idx, term in call_accesses]))
+        print('\n'.join([f'({idx}, {str(term)}, {str(val)})' for idx, term, val in call_accesses]))
         print("")
         print("Global access:")
         print('\n'.join([f'({idx}, {str(global_instance.value)})' for idx, global_instance in enumerate(self.store.global_list)]))
@@ -842,8 +843,8 @@ class AbstractConfiguration:
             ArithmeticLogicUnit.exec_symbolic(self, instr, i, memory_accesses, var_accesses, call_accesses)
 
         final_locals = self.frame.local_list
-        global_accesses = [var_access for var_access in var_accesses if "global" in var_access[1].instr.name]
-
+        filtered_accesses = process_accesses(var_accesses)
+        global_accesses = [var_access for var_access in filtered_accesses if "global" in var_access[1].instr.name]
         if interesting_block(var_accesses):
             print("")
             print("Instructions:")
@@ -861,12 +862,30 @@ class AbstractConfiguration:
             self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
 
 
-def interesting_block(var_accesses: typing.List[typing.Tuple[int, Term]]) -> bool:
+def process_accesses(var_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]) -> typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]:
+    """
+    To avoid repeated instructions for load accesses to the same variable, we ensure for each value that has been stored
+    there is only one access that loads it
+    """
+    loaded_variables = set()
+    filtered_accesses = []
+    for var_access in var_accesses:
+        idx, instr_term, loaded_value = var_access
+        if loaded_value is None:
+            filtered_accesses.append(var_access)
+        else:
+            loaded_repr = str(loaded_value.val())
+            if loaded_repr not in loaded_variables:
+                filtered_accesses.append(var_access)
+    return filtered_accesses
+
+
+def interesting_block(var_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]) -> bool:
     """
     Blocks are interesting when a variable is that is used is then stored using local.set (instead of local.tee)
     """
     values_args = set()
-    for idx, term in var_accesses:
+    for idx, term, _ in var_accesses:
         current_args = term.instr.args
         if len(current_args) > 0:
             assert len(current_args) == 1
@@ -985,8 +1004,8 @@ def access_representation(access: int, term: Term) -> str:
     return f"{term}_{access}"
 
 
-def introduce_access(term: Term, access: int, current_ops: typing.Dict, new_index_per_instr: typing.Dict,
-                     stack_var_factory: StackVarFactory) -> None:
+def introduce_access(term: Term, access: int, value_repr: typing.Optional[str], current_ops: typing.Dict,
+                     new_index_per_instr: typing.Dict, stack_var_factory: StackVarFactory) -> None:
     """
     Assumes the stack_var_factory already contains all the stack vars associated to its subterms.
     Also, to avoid two accesses with the same arguments to be assigned only once, we add the position in the sequence in
@@ -997,7 +1016,8 @@ def introduce_access(term: Term, access: int, current_ops: typing.Dict, new_inde
                     for input_term in term.ops]
     opcode_name = term.instr.name
     term_repr = term.repr
-    outpt_sk = stack_var_factory.stack_var(term_repr) if term.instr.out_arity > 0 else []
+    outpt_sk = stack_var_factory.stack_var(value_repr) if value_repr is not None else (
+        stack_var_factory.stack_var(term_repr)) if term.instr.out_arity > 0 else []
     term_info = {"id": f"{opcode_name}_{access}", "disasm": opcode_name,
                  "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": outpt_sk, 'push': False, "commutative": term.instr.comm,
@@ -1015,10 +1035,10 @@ def operands_from_stack(stack: Stack, current_ops: typing.Dict, new_index_per_in
     return symbolic_stack
 
 
-def operands_from_accesses(accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict,
-                           new_index_per_instr: typing.Dict, stack_var_factory: StackVarFactory):
-    for pos, val in accesses:
-        introduce_access(val, pos, current_ops, new_index_per_instr, stack_var_factory)
+def operands_from_accesses(accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]],
+                           current_ops: typing.Dict, new_index_per_instr: typing.Dict, stack_var_factory: StackVarFactory):
+    for pos, term, val in accesses:
+        introduce_access(term, pos, str(val.val()) if val is not None else val, current_ops, new_index_per_instr, stack_var_factory)
 
 
 def set_instruction(arg_num: int):
@@ -1120,19 +1140,23 @@ def simplify_dependencies(deps: typing.List[typing.Tuple[int, int]]) -> typing.L
     return list(tr.edges)
 
 
-def deps_from_var_accesses(var_accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict) -> typing.List[typing.Tuple[str, str]]:
-    dependencies = [(i, j+i+1) for i, (_, var_access1) in enumerate(var_accesses)
-                    for j, (_, var_access2) in enumerate(var_accesses[i+1:])
+def deps_from_var_accesses(var_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]],
+                           current_ops: typing.Dict) -> typing.List[typing.Tuple[str, str]]:
+    dependencies = [(i, j+i+1) for i, (_, var_access1, _) in enumerate(var_accesses)
+                    for j, (_, var_access2, _) in enumerate(var_accesses[i+1:])
                     if are_dependent_var_access(var_access1, var_access2)]
-    return [(current_ops[access_representation(*var_accesses[i])]['id'], current_ops[access_representation(*var_accesses[j])]['id'])
+    return [(current_ops[access_representation(var_accesses[i][0], var_accesses[i][1])]['id'],
+             current_ops[access_representation(var_accesses[j][0], var_accesses[j][1])]['id'])
             for i, j in simplify_dependencies(dependencies)]
 
 
-def deps_from_mem_accesses(mem_accesses: typing.List[typing.Tuple[int, Term]], current_ops: typing.Dict) -> typing.List[typing.Tuple[str, str]]:
-    dependencies = [(i, j+i+1) for i, (_, mem_access1) in enumerate(mem_accesses)
-                    for j, (_, mem_access2) in enumerate(mem_accesses[i+1:])
+def deps_from_mem_accesses(mem_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]],
+                           current_ops: typing.Dict) -> typing.List[typing.Tuple[str, str]]:
+    dependencies = [(i, j+i+1) for i, (_, mem_access1, _) in enumerate(mem_accesses)
+                    for j, (_, mem_access2, _) in enumerate(mem_accesses[i+1:])
                     if are_dependent_mem_access(mem_access1, mem_access2)]
-    return [(current_ops[access_representation(*mem_accesses[i])]['id'], current_ops[access_representation(*mem_accesses[j])]['id'])
+    return [(current_ops[access_representation(mem_accesses[i][0], mem_accesses[i][1])]['id'],
+             current_ops[access_representation(mem_accesses[j][0], mem_accesses[j][1])]['id'])
             for i, j in simplify_dependencies(dependencies)]
 
 
@@ -1175,9 +1199,10 @@ def initial_length(instrs: typing.List[binary.Instruction]):
     return len(instrs)
 
 
-def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack, memory_accesses: typing.List[typing.Tuple[int, Term]],
-                           global_accesses: typing.List[typing.Tuple[int, Term]],
-                           call_accesses: typing.List[typing.Tuple[int, Term]], instrs: typing.List[binary.Instruction],
+def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack,
+                           memory_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]],
+                           global_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]],
+                           call_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]], instrs: typing.List[binary.Instruction],
                            initial_locals: typing.List[Value], final_locals: typing.List[Value], max_sk_sz: int,
                            stack_var_factory: StackVarFactory) -> typing.Dict:
     current_ops = {}
@@ -1236,9 +1261,9 @@ class ArithmeticLogicUnit:
 
     @staticmethod
     def exec_symbolic(config: AbstractConfiguration, i: binary.Instruction, idx: int,
-                      memory_accesses: typing.List[typing.Tuple[int, Term]],
-                      var_accesses: typing.List[typing.Tuple[int, Term]],
-                      call_accesses: typing.List[typing.Tuple[int, Term]]):
+                      memory_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]],
+                      var_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]],
+                      call_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]):
         # Exec symbolic: execute if the concrete instruction if the args are concrete.
         # Otherwise, consume the corresponding elements and annotate the mem access
         # (globals, locals or the linear memory)
@@ -1255,7 +1280,7 @@ class ArithmeticLogicUnit:
                 pass
             elif i.opcode == instruction.call:
                 call_expr = ArithmeticLogicUnit.call_symbolic(config, i, idx)
-                call_accesses.append((idx, call_expr))
+                call_accesses.append((idx, call_expr, None))
             # elif i.opcode == instruction.call_indirect:
             #     call_expr = ArithmeticLogicUnit.call_indirect_symbolic(config, i)
             #     call_accesses.append(f"{call_expr}_{idx}")
@@ -1264,11 +1289,18 @@ class ArithmeticLogicUnit:
             var_expr = term_from_func(config, i)
             # Apply the symbolic function
             func(config, i)
-            var_accesses.append((idx, var_expr))
+
+            # If we are loading a value, we store the value accessed
+            if 'get' in i.name:
+                loaded_expr = config.stack.data[-1]
+            # Otherwise, we just store None
+            else:
+                loaded_expr = None
+            var_accesses.append((idx, var_expr, loaded_expr))
 
         elif i.type == instruction.InstructionType.memory:
             mem_expr = symbolic_func(config, i, idx)
-            memory_accesses.append((idx, mem_expr))
+            memory_accesses.append((idx, mem_expr, None))
         else:
             # Either numeric or parametric instruction. We only try executing if all the values in the stack
             # are not symbolic
