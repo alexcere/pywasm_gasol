@@ -15,13 +15,19 @@ def idx_from_access(access: str) -> int:
     return int(re.search(access_re, access).group(1))
 
 
-def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[var_T, var_T], vars_: Set[var_T], user_instr: List[instr_T]):
+def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[var_T, var_T],
+                  vars_: Set[var_T], user_instr: List[instr_T]) -> id_T:
+    """
+    Executes the instruction and returns the id from the instruction according to user_instr
+    """
+    assigned_instr = None
     # Case const: filter the instruction that has introduces that value
     if 'const' in instr_name:
         const = int(re.search(const_re, instr_name).group(1))
         filtered_instrs = [instr for instr in user_instr if f'const' in instr['disasm'] and instr['value'] == const]
         assert len(filtered_instrs) == 1
-        const_var = filtered_instrs[0]['outpt_sk'][0]
+        assigned_instr = filtered_instrs[0]
+        const_var = assigned_instr['outpt_sk'][0]
         cstack.insert(0, const_var)
         vars_.add(const_var)
 
@@ -42,6 +48,7 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
             # Check it exists exactly one instruction for loading
             filtered_instr = [instr for instr in user_instr if instr['oupt_sk'] == local_val]
             assert len(filtered_instr) == 1
+            assigned_instr = filtered_instr[0]
             cstack.insert(0, local_val)
             vars_.add(local_val)
 
@@ -70,20 +77,24 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
 
         # print(instr_name, pos, *[(instr['id'], instr['disasm']) for instr in user_instr])
         assert len(filtered_instrs) == 1
-        filtered_instr = filtered_instrs[0]
+        assigned_instr = filtered_instrs[0]
 
         # We consume the elements
-        for input_var in filtered_instr['inpt_sk']:
+        for input_var in assigned_instr['inpt_sk']:
             assert cstack[0] == input_var
             cstack.pop(0)
 
         # We introduce the new elements
-        for output_var in filtered_instr['outpt_sk']:
+        for output_var in assigned_instr['outpt_sk']:
             cstack.insert(0, output_var)
             vars_.add(output_var)
 
+    # If assigned_instr has a not null value, then it returns the id associated.
+    # Otherwise, it just returns the instr_name
+    return assigned_instr['id'] if assigned_instr is not None else instr_name
 
-def symbolic_execution_from_sfs(sfs: Dict):
+
+def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     original_instr: str = sfs['original_instrs']
     id2instr: List[instr_T] = sfs['user_instrs']
     instrs: List[str] = original_instr.split(' ')
@@ -99,13 +110,14 @@ def symbolic_execution_from_sfs(sfs: Dict):
     vars_ = set(clocals.keys())
     vars_.update(cstack)
 
-    for i, instr in enumerate(instrs):
-        execute_instr(instr, i, cstack, clocals, vars_, id2instr)
+    final_instr_ids = [execute_instr(instr, i, cstack, clocals, vars_, id2instr) for i, instr in enumerate(instrs)]
 
     assert cstack == fstack, 'Stack do not match'
     assert clocals == flocals, 'Locals do not match'
     assert vars_ == sfs_vars, 'Vars do not match'
     print("They match!")
+    print(final_instr_ids)
+    return final_instr_ids
 
 
 if __name__ == "__main__":
