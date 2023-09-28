@@ -70,12 +70,13 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
     else:
         if any(instr in instr_name for instr in ['call', 'global', 'load', 'store']):
             filtered_instrs = [instr for instr in user_instr
-                               if instr['disasm'] in instr_name and f'_{pos}' in instr['id']]
+                               if instr['disasm'] in instr_name and instr['id'].endswith(f'_{pos}')]
         else:
             filtered_instrs = [instr for instr in user_instr if instr['disasm'] in instr_name and
                                all(cstack[i] == input_var for i, input_var in enumerate(instr['inpt_sk']))]
 
         # print(instr_name, pos, *[(instr['id'], instr['disasm']) for instr in user_instr])
+        # print(instr_name, pos, *[(instr['id'], instr['disasm']) for instr in filtered_instrs])
         assert len(filtered_instrs) == 1
         assigned_instr = filtered_instrs[0]
 
