@@ -957,6 +957,7 @@ def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: ty
 def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_instr: typing.Dict, constant,
                        stack_var_factory: StackVarFactory) -> str:
     opcode_info = instruction.opcode_info[opcode]
+    opcode_name = opcode_info['name']
     term_repr = str(constant)
 
     # TODO: maybe improve the calls?
@@ -966,11 +967,11 @@ def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_inst
     # Then we access it to mark it as accessed
     term_vars = stack_var_factory.stack_var(term_repr)
 
-    term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "disasm": opcode_info["name"],
+    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_info["name"],
                  "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": term_vars, 'push': True,
                  "commutative": False, 'storage': False, 'value': constant, 'gas': 1, 'size': 1}
     current_ops[term_repr] = term_info
-    new_index_per_instr['PUSH'] += 1
+    new_index_per_instr[opcode_name] += 1
     return term_vars[0]
 
 
