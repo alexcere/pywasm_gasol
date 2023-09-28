@@ -717,7 +717,7 @@ class AbstractConfiguration:
                             for i, global_value in enumerate(self.store.global_list)]
         self.global_count += 1
         self.store.global_list = symbolic_globals
-        print("STORE", *[str(store_val.value) for store_val in self.store.global_list])
+        # print("STORE", *[str(store_val.value) for store_val in self.store.global_list])
 
     def initialize_store(self):
         self.global_count = 1
@@ -958,13 +958,20 @@ def introduce_constant(opcode: int, current_ops: typing.Dict, new_index_per_inst
                        stack_var_factory: StackVarFactory) -> str:
     opcode_info = instruction.opcode_info[opcode]
     term_repr = str(constant)
-    term_var = stack_var_factory.assign_stack_var(term_repr)
+
+    # TODO: maybe improve the calls?
+    # First we assign a stack var to the term
+    stack_var_factory.assign_stack_var(term_repr)
+
+    # Then we access it to mark it as accessed
+    term_vars = stack_var_factory.stack_var(term_repr)
+
     term_info = {"id": f"PUSH_{new_index_per_instr['PUSH']}", "disasm": opcode_info["name"],
-                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": [term_var], 'push': True,
+                 "opcode": hex(opcode)[2:], "inpt_sk": [], "outpt_sk": term_vars, 'push': True,
                  "commutative": False, 'storage': False, 'value': constant, 'gas': 1, 'size': 1}
     current_ops[term_repr] = term_info
     new_index_per_instr['PUSH'] += 1
-    return term_var
+    return term_vars[0]
 
 
 # Change from the function above: no instruction is generated for loading locals

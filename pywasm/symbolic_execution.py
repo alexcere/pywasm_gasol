@@ -68,7 +68,7 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
             filtered_instrs = [instr for instr in user_instr if instr['disasm'] in instr_name and
                                all(cstack[i] == input_var for i, input_var in enumerate(instr['inpt_sk']))]
 
-        print(instr_name, pos, *[(instr['id'], instr['disasm']) for instr in user_instr])
+        # print(instr_name, pos, *[(instr['id'], instr['disasm']) for instr in user_instr])
         assert len(filtered_instrs) == 1
         filtered_instr = filtered_instrs[0]
 
@@ -94,15 +94,18 @@ def symbolic_execution_from_sfs(sfs: Dict):
     clocals: Dict[var_T, var_T] = {local_repr[0]: local_repr[0] for local_repr in local_changes}
     flocals: Dict[var_T, var_T] = {local_repr[0]: local_repr[1] for local_repr in local_changes}
     cstack, fstack = sfs['src_ws'], sfs['tgt_ws']
-    vars_ = set()
+
+    # We include directly the initial values in istack and ilocals
+    vars_ = set(clocals.keys())
+    vars_.update(cstack)
+
     for i, instr in enumerate(instrs):
         execute_instr(instr, i, cstack, clocals, vars_, id2instr)
-
-    print(vars_, sfs_vars)
 
     assert cstack == fstack, 'Stack do not match'
     assert clocals == flocals, 'Locals do not match'
     assert vars_ == sfs_vars, 'Vars do not match'
+    print("They match!")
 
 
 if __name__ == "__main__":
