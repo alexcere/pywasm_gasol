@@ -95,11 +95,19 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
     return assigned_instr['id'] if assigned_instr is not None else instr_name
 
 
+def check_deps(instr_ids: List[id_T], dependencies: List[Tuple[id_T, id_T]]) -> bool:
+    """
+    Check the ids from the final instructions satisfy the dependencies
+    """
+    return all(instr_ids.index(dep[0]) < instr_ids.index(dep[1]) for dep in dependencies)
+
+
 def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     original_instr: str = sfs['original_instrs']
     id2instr: List[instr_T] = sfs['user_instrs']
     instrs: List[str] = original_instr.split(' ')
     local_changes: List[Tuple[var_T, var_T]] = sfs['register_changes']
+    dependencies: List[Tuple[id_T, id_T]] = sfs['dependencies']
     sfs_vars: Set[str] = set(sfs['vars'])
 
     # We split into two different dicts the initial values and final values in locals
@@ -116,6 +124,7 @@ def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     assert cstack == fstack, 'Stack do not match'
     assert clocals == flocals, 'Locals do not match'
     assert vars_ == sfs_vars, 'Vars do not match'
+    assert check_deps(final_instr_ids, dependencies), 'Dependencies are not coherent'
     print("They match!")
     print(final_instr_ids)
     return final_instr_ids
