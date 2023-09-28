@@ -15,7 +15,7 @@ def idx_from_access(access: str) -> int:
     return int(re.search(access_re, access).group(1))
 
 
-def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[var_T, var_T],
+def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[var_T, var_T], ilocals: List[var_T],
                   vars_: Set[var_T], user_instr: List[instr_T]) -> id_T:
     """
     Executes the instruction and returns the id from the instruction according to user_instr
@@ -34,6 +34,7 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
     # Drop: just remove the instruction that introduced the value
     elif instr_name == 'drop':
         vars_.add(cstack.pop(0))
+        assigned_instr = 'POP'
 
     # load.get: get the value from the corresponding local
     elif 'local.get' in instr_name:
@@ -44,6 +45,7 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
         if local_name is not None:
             cstack.insert(0, clocals[local_name])
             vars_.add(clocals[local_name])
+            assigned_instr = f'LGET_{ilocals.index(local_name)}'
         else:
             # Check it exists exactly one instruction for loading
             filtered_instr = [instr for instr in user_instr if instr['oupt_sk'] == local_val]
@@ -64,6 +66,9 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
         # If it is set instead of tee, we remove the value from the stack
         if 'local.set' in instr_name:
             cstack.pop(0)
+            assigned_instr = f'LSET_{ilocals.index(local_name)}'
+        else:
+            assigned_instr = f'LSET_{ilocals.index(local_name)}'
 
     # Remaining instructions: filter those instructions whose disasm matches the instr name and consumes the same
     # values. For call and global instructions, we also use the access position to filter the instruction
@@ -92,7 +97,7 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
 
     # If assigned_instr has a not null value, then it returns the id associated.
     # Otherwise, it just returns the instr_name
-    return assigned_instr['id'] if assigned_instr is not None else instr_name
+    return assigned_instr['id'] if type(assigned_instr) != str else assigned_instr
 
 
 def check_deps(instr_ids: List[id_T], dependencies: List[Tuple[id_T, id_T]]) -> bool:
@@ -102,15 +107,39 @@ def check_deps(instr_ids: List[id_T], dependencies: List[Tuple[id_T, id_T]]) -> 
     return all(instr_ids.index(dep[0]) < instr_ids.index(dep[1]) for dep in dependencies)
 
 
+def ensure_ids_are_unique(user_instr: List[instr_T]) -> bool:
+    accesses = set()
+    for instr in user_instr:
+        instr_id = instr['id']
+        if instr_id in accesses:
+            return False
+        else:
+            accesses.add(instr_id)
+    return True
+
+
+def ensure_stack_vars_are_unique(user_instr: List[instr_T]) -> bool:
+    accesses = set()
+    for instr in user_instr:
+        stack_vars = instr['outpt_sk']
+        for stack_var in stack_vars:
+            if stack_var in accesses:
+                return False
+            else:
+                accesses.add(stack_var)
+    return True
+
+
 def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     original_instr: str = sfs['original_instrs']
-    id2instr: List[instr_T] = sfs['user_instrs']
+    user_instr: List[instr_T] = sfs['user_instrs']
     instrs: List[str] = original_instr.split(' ')
     local_changes: List[Tuple[var_T, var_T]] = sfs['register_changes']
     dependencies: List[Tuple[id_T, id_T]] = sfs['dependencies']
     sfs_vars: Set[str] = set(sfs['vars'])
 
     # We split into two different dicts the initial values and final values in locals
+    ilocals: List[var_T] = [local_repr[0] for local_repr in local_changes]
     clocals: Dict[var_T, var_T] = {local_repr[0]: local_repr[0] for local_repr in local_changes}
     flocals: Dict[var_T, var_T] = {local_repr[0]: local_repr[1] for local_repr in local_changes}
     cstack, fstack = sfs['src_ws'], sfs['tgt_ws']
@@ -119,14 +148,16 @@ def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     vars_ = set(clocals.keys())
     vars_.update(cstack)
 
-    final_instr_ids = [execute_instr(instr, i, cstack, clocals, vars_, id2instr) for i, instr in enumerate(instrs)]
+    final_instr_ids = [execute_instr(instr, i, cstack, clocals, ilocals, vars_, user_instr) for i, instr in enumerate(instrs)]
 
+    assert ensure_ids_are_unique(user_instr), 'Ids are not unique'
+    assert ensure_stack_vars_are_unique(user_instr), 'Stack vars are not unique'
     assert cstack == fstack, 'Stack do not match'
     assert clocals == flocals, 'Locals do not match'
     assert vars_ == sfs_vars, 'Vars do not match'
     assert check_deps(final_instr_ids, dependencies), 'Dependencies are not coherent'
-    print("They match!")
     print(final_instr_ids)
+    print("They match!")
     return final_instr_ids
 
 
