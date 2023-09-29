@@ -69,7 +69,7 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
             cstack.pop(0)
             assigned_instr = f'LSET_{ilocals.index(local_name)}'
         else:
-            assigned_instr = f'LSET_{ilocals.index(local_name)}'
+            assigned_instr = f'LTEE_{ilocals.index(local_name)}'
 
     # Remaining instructions: filter those instructions whose disasm matches the instr name and consumes the same
     # values. For call and global instructions, we also use the access position to filter the instruction
@@ -99,6 +99,47 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
     # If assigned_instr has a not null value, then it returns the id associated.
     # Otherwise, it just returns the instr_name
     return assigned_instr['id'] if type(assigned_instr) != str else assigned_instr
+
+
+def extract_idx_from_id(instr_id: str) -> int:
+    return int(instr_id.split('_')[-1])
+
+
+def execute_instr_id(instr_id: str, cstack: List[var_T], clocals: List[var_T], user_instr: List[instr_T]):
+    """
+    Executes the instr id according to user_instr
+    """
+    # Drop the value
+    if instr_id == 'POP':
+        cstack.pop(0)
+
+    # load.get: get the value from the corresponding local
+    elif 'LGET' in instr_id:
+        idx = extract_idx_from_id(instr_id)
+        local_val = clocals[idx]
+        cstack.insert(0, local_val)
+
+    # load.set: store the value in the corresponding local
+    elif 'LSET' in instr_id:
+        idx = extract_idx_from_id(instr_id)
+        clocals[idx] = cstack.pop(0)
+
+    # load.tee: store the value in the corresponding local without consuming the top of the stack
+    elif 'LTEE' in instr_id:
+        idx = extract_idx_from_id(instr_id)
+        clocals[idx] = cstack[0]
+
+    else:
+        instr = [instr for instr in user_instr if instr['id'] == instr_id][0]
+
+        # We consume the elements
+        for input_var in instr['inpt_sk']:
+            assert cstack[0] == input_var
+            cstack.pop(0)
+
+        # We introduce the new elements
+        for output_var in instr['outpt_sk']:
+            cstack.insert(0, output_var)
 
 
 def check_deps(instr_ids: List[id_T], dependencies: List[Tuple[id_T, id_T]]) -> bool:
@@ -143,7 +184,7 @@ def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     ilocals: List[var_T] = [local_repr[0] for local_repr in local_changes]
     clocals: Dict[var_T, var_T] = {local_repr[0]: local_repr[0] for local_repr in local_changes}
     flocals: Dict[var_T, var_T] = {local_repr[0]: local_repr[1] for local_repr in local_changes}
-    cstack, fstack = sfs['src_ws'], sfs['tgt_ws']
+    cstack, fstack = sfs['src_ws'].copy(), sfs['tgt_ws']
 
     # We include directly the initial values in istack and ilocals
     vars_ = set(clocals.keys())
@@ -157,6 +198,16 @@ def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     assert clocals == flocals, 'Locals do not match'
     assert vars_ == sfs_vars, 'Vars do not match'
     assert check_deps(final_instr_ids, dependencies), 'Dependencies are not coherent'
+
+    # Check that the ids returned generate the final state
+    cstack, clocals_list = sfs['src_ws'], ilocals.copy()
+    flocal_list = [local_repr[1] for local_repr in local_changes]
+
+    for instr_id in final_instr_ids:
+        execute_instr_id(instr_id, cstack, clocals_list, user_instr)
+    assert cstack == fstack, 'Ids - Stack do not match'
+    assert clocals_list == flocal_list, 'Ids - Locals do not match'
+
     print(final_instr_ids)
     print("They match!")
     return final_instr_ids
