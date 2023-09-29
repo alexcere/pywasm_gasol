@@ -845,6 +845,7 @@ class AbstractConfiguration:
 
         final_locals = self.frame.local_list
         filtered_accesses = process_accesses(var_accesses)
+        # filtered_memory_accesses = process_memory_accesses(memory_accesses)
         global_accesses = [var_access for var_access in filtered_accesses if "global" in var_access[1].instr.name]
         if interesting_block(var_accesses):
             print("")
@@ -854,6 +855,7 @@ class AbstractConfiguration:
             print("")
             json_sat = sfs_with_local_changes(initial_stack, self.stack, memory_accesses, global_accesses, call_accesses,
                                               basic_block, initial_locals, final_locals, self.max_stack_size, self.term2var)
+            store_json(json_sat, block_name)
             json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"],
                                                                                             json_sat["dependencies"])
             json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
@@ -985,7 +987,7 @@ def instruction_from_value(val: Value, current_ops: typing.Dict, new_index_per_i
     value_rep = str(value)
     # If it is a subterm from a term, we just return the first stack var and don't introduce any op.
     # IMPORTANT: these terms are guaranteed to correspond exactly to one stack var
-    if stack_var_factory.has_been_accessed(value_rep) or (type(val) == Term and value.instr.sub_indexes is not None):
+    if stack_var_factory.has_been_accessed(value_rep) or (type(value) == Term and value.sub_indexes is not None):
         return stack_var_factory.stack_var(value_rep)[0]
     else:
         if val.type == convention.term:
