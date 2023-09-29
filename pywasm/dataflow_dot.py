@@ -27,7 +27,7 @@ def dot_for_term(term: str, user_instr: typing.List[typing.Dict], term_to_id: ty
     else:
         add_node(term, term_to_id, "blue" if len(current_instr["outpt_sk"]) > 0 else "green", f)
 
-        children = [stack_var_to_id[child] for child in current_instr['inpt_sk']]
+        children = [stack_var_to_id.get(child, child) for child in current_instr['inpt_sk']]
         for child in children:
             dot_for_term(child, user_instr, term_to_id, stack_var_to_id, f)
             add_edge(term, child, term_to_id, "child", f)
@@ -39,15 +39,15 @@ def dot_for_term(term: str, user_instr: typing.List[typing.Dict], term_to_id: ty
 
 # Given the blocks corresponding to the CFG of a program, and the string containing the input program,
 # generates a graphical representation of the CFG as a .dot file.
-def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name: str = "cfg.dot"):
+def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name):
     with open(dot_file_name, 'w') as f:
         f.write("digraph G {\n")
         final_stack = sfs_json["tgt_ws"]
         initial_stack = sfs_json["src_ws"]
         user_instrs = sfs_json["user_instrs"]
         local_changes = sfs_json["local_changes"]
-        mem_deps = sfs_json["memory_dependences"]
-        local_deps = sfs_json["local_dependences"]
+        mem_deps = sfs_json["dependencies"]
+        # local_deps = sfs_json["local_dependences"]
 
         stack_var_to_id = {instr['outpt_sk'][0]: instr['id'] for instr in user_instrs if len(instr['outpt_sk']) == 1 and 'tee' not in instr['id']}
         term_to_id = {}
@@ -74,15 +74,15 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name: str = "cfg.dot"):
         for acc1, acc2 in mem_deps:
             add_edge(acc2, acc1, term_to_id, "dep", f)
 
-        for acc1, acc2 in local_deps:
-            # Avoid repeating accesses for set and tee
-            if "tee" in acc2:
-                continue
-
-            # We need to filter which variable is accessed. acc2 is a set or tee access, and hence
-            # we don't include it in our representation
-            local_name = [instr["value"] for instr in user_instrs if instr["id"] == acc1][0]
-            add_edge(local_name, acc1, term_to_id, "loc_dep", f)
+        # for acc1, acc2 in local_deps:
+        #     # Avoid repeating accesses for set and tee
+        #     if "tee" in acc2:
+        #         continue
+        #
+        #     # We need to filter which variable is accessed. acc2 is a set or tee access, and hence
+        #     # we don't include it in our representation
+        #     local_name = [instr["value"] for instr in user_instrs if instr["id"] == acc1][0]
+        #     add_edge(local_name, acc1, term_to_id, "loc_dep", f)
 
         f.write("}\n")
 

@@ -15,6 +15,7 @@ from . import option
 from . import global_params
 from . import dataflow_dot
 from . import dependencies
+from . import symbolic_execution
 
 import sys
 # ======================================================================================================================
@@ -853,7 +854,9 @@ class AbstractConfiguration:
             print("")
             json_sat = sfs_with_local_changes(initial_stack, self.stack, memory_accesses, global_accesses, call_accesses,
                                               basic_block, initial_locals, final_locals, self.max_stack_size, self.term2var)
-            # json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"], json_sat["dependencies"])
+            json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"],
+                                                                                            json_sat["dependencies"])
+            json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
             store_json(json_sat, block_name)
 
             # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
