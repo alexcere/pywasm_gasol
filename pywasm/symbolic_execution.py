@@ -48,7 +48,7 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
             assigned_instr = f'LGET_{ilocals.index(local_name)}'
         else:
             # Check it exists exactly one instruction for loading
-            filtered_instrs = [instr for instr in user_instr if instr['outpt_sk'][0] == local_name]
+            filtered_instrs = [instr for instr in user_instr if len(instr['outpt_sk']) > 0 and instr['outpt_sk'][0] == local_name]
             assert len(filtered_instrs) == 1
             assigned_instr = filtered_instrs[0]
             local_val = assigned_instr['outpt_sk'][0]
