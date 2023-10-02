@@ -121,6 +121,19 @@ def load(name: str, imps: typing.Dict = None, opts: typing.Optional[option.Optio
         return Runtime(module, imps, opts)
 
 
+def symbolic_exec_from_block(file_name: str):
+    # Generate a runtime directly by loading a file from disk.
+    with open(file_name, 'r') as f:
+        plain_instrs = f.read().split()
+        function_addresses = []
+        instrs = [binary.Instruction.from_plain_repr(plain_instr, function_addresses) for plain_instr in plain_instrs]
+
+        # We retrieve the maximum index accessed from the locals and globals
+        n_locals = max(instr.args[0] for instr in instrs if 'local' in instr.name) + 1
+        n_globals = max(instr.args[0] for instr in instrs if 'global' in instr.name) + 1
+        execution.symbolic_execution_from_instrs(instrs, function_addresses, n_locals, n_globals)
+
+
 Store = execution.Store
 Memory = execution.MemoryInstance
 Value = execution.Value

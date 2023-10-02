@@ -1477,7 +1477,7 @@ class ArithmeticLogicUnit:
         new_instr.args: typing.List[typing.Any] = []
         new_instr.type: instruction.InstructionType = instruction.InstructionType.control
         new_instr.in_arity: int = len(function_type.args.data)
-        new_instr.out_arity: int = len(function.type.rets.data)
+        new_instr.out_arity: int = len(function_type.rets.data)
         new_instr.comm = False
         return new_instr
 
@@ -1496,6 +1496,7 @@ class ArithmeticLogicUnit:
     @staticmethod
     def call_symbolic(config: AbstractConfiguration, i: binary.Instruction, idx: int):
         instr = ArithmeticLogicUnit.instr_from_call(config, i)
+        print(instr, instr.out_arity)
         # We need to update the store to initialize new globals
         config.update_store()
         return symbolic_func(config, instr, idx)
@@ -2981,3 +2982,58 @@ class Machine:
         config = AbstractConfiguration(self.store)
         config.opts = self.opts
         return config.call_symbolic(function, function_args, func_address)
+
+
+def allocate_function(store: Store, arity: typing.Tuple[int, int]):
+    """
+    Given a store and the arity of the call, introduces a function with the given arity in address.
+    To avoid complex calls, we ignore the type of the arguments
+    (this does not affect, as validation step is not performed)
+    """
+    # Only the number of elements is relevant at this point. Hence, we can initialize the value types to any element
+    # TODO: improve representation (maybe useful in the future)
+    in_result = binary.ResultType()
+    in_result.data = ['' for _ in range(arity[0])]
+    out_result = binary.ResultType()
+    out_result.data = ['' for _ in range(arity[1])]
+
+    func_type = binary.FunctionType()
+    func_type.args = in_result
+    func_type.rets = out_result
+
+    # We declare it as a HostFunc because it requires less arguments to initialize
+    wasmfunc = HostFunc(func_type, None)
+    store.function_list.append(wasmfunc)
+
+
+def allocate_globals(store: Store, module: ModuleInstance, n_globals: int):
+    module.global_addr_list = [GlobalAddress(i) for i in range(n_globals)]
+    store.global_list = [GlobalInstance(Value.new(convention.symbolic, f"global_{i}"), binary.Mut(0x01)) for i in range(n_globals)]
+
+
+def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
+                                   function_addrs: typing.List[typing.Tuple[int, int]],
+                                   n_locals: int, n_globals: int):
+    store = Store()
+
+    # We allocate 'symbolic' functions to enable the symbolic execution
+    for arity in function_addrs:
+        allocate_function(store, arity)
+
+    config = AbstractConfiguration(store)
+
+    module = ModuleInstance()
+    allocate_globals(store, module, n_globals)
+
+    # We need to initialize the locals and set the frame
+    local_list = [Value.new(convention.symbolic, f"local_{i}") for i in range(n_locals)]
+    frame = Frame(
+        module=module,
+        local_list=local_list,
+        expr=None,
+        arity=None,
+    )
+    config.set_frame(frame)
+
+    # Execute the block symbolically with the instructions
+    config.exec_symbolic_block(instrs, 'isolated')

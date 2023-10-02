@@ -1,4 +1,5 @@
 import io
+import re
 import typing
 
 from . import convention
@@ -337,6 +338,122 @@ class Instruction:
         if o.opcode not in instruction.opcode:
             raise Exception("unsupported opcode", o.opcode)
         return o
+
+    @classmethod
+    def from_plain_repr(cls, instr_str: str, function_addrs: typing.List[typing.Tuple[int, int]]) -> 'Instruction':
+        o = Instruction()
+        instr_code, instr_info = [(instr_code, instr_info) for instr_code, instr_info in instruction.opcode_info.items()
+                                  if instr_str.split('[')[0] == instr_info['name']][0]
+        o.opcode: int = instr_code
+        o.name = instr_info["name"]
+        o.type = instr_info["type"]
+        o.in_arity = instr_info["in_ar"]
+        o.out_arity = instr_info["out_ar"]
+        o.comm = instr_info["comm"]
+        o.args = []
+
+        # We ignore control instructions
+        if o.opcode in [
+            instruction.block,
+            instruction.loop,
+            instruction.if_,
+            instruction.br,
+            instruction.br_if,
+            instruction.br_table,
+            instruction.call_indirect # For now, we don't consider indirect calls as well TODO: include in the future
+        ]:
+            raise ValueError(f"{o.name} not supported in local representation")
+
+        # Call instructions must specify its in and out arity. We create a function for each combination of
+        # in and out arities
+        if o.opcode == instruction.call:
+            in_ar, out_ar = arguments_from_instr(instr_str)
+            arity_pair = int(in_ar), int(out_ar)
+
+            # We try searching for a combination that matches current one
+            if arity_pair not in function_addrs:
+                addr = len(function_addrs)
+                function_addrs.append(arity_pair)
+            else:
+                addr = function_addrs.index(arity_pair)
+
+            # Finally, we include the assign address
+            o.args = [FunctionIndex(addr)]
+            return o
+        if o.opcode in [
+            instruction.get_local,
+            instruction.set_local,
+            instruction.tee_local,
+        ]:
+            o.args = [LocalIndex(idx_from_access(instr_str))]
+            return o
+        if o.opcode in [
+            instruction.get_global,
+            instruction.set_global,
+        ]:
+            o.args = [GlobalIndex(idx_from_access(instr_str))]
+            return o
+        if o.opcode in [
+            instruction.i32_load,
+            instruction.i64_load,
+            instruction.f32_load,
+            instruction.f64_load,
+            instruction.i32_load8_s,
+            instruction.i32_load8_u,
+            instruction.i32_load16_s,
+            instruction.i32_load16_u,
+            instruction.i64_load8_s,
+            instruction.i64_load8_u,
+            instruction.i64_load16_s,
+            instruction.i64_load16_u,
+            instruction.i64_load32_s,
+            instruction.i64_load32_u,
+            instruction.i32_store,
+            instruction.i64_store,
+            instruction.f32_store,
+            instruction.f64_store,
+            instruction.i32_store8,
+            instruction.i32_store16,
+            instruction.i64_store8,
+            instruction.i64_store16,
+            instruction.i64_store32,
+        ]:
+            o.args = [int(arg_str) for arg_str in arguments_from_instr(instr_str)]
+            return o
+        if o.opcode in [
+            instruction.current_memory,
+            instruction.grow_memory
+        ]:
+            n = ord(arguments_from_instr(instr_str)[0])
+            o.args = [n]
+            return o
+        if o.opcode in [instruction.i32_const,
+                        instruction.i64_const]:
+            o.args = [int(arguments_from_instr(instr_str)[0])]
+            return o
+        if o.opcode in [instruction.f32_const,
+                        instruction.f64_const]:
+            # https://stackoverflow.com/questions/47961537/webassembly-f32-const-nan0x200000-means-0x7fa00000-or-0x7fe00000
+            # python misinterpret 0x7fa00000 as 0x7fe00000, when encapsulate as built-in float type.
+            o.args = [float(arguments_from_instr(instr_str)[0])]
+            return o
+        if o.opcode not in instruction.opcode:
+            raise Exception("unsupported opcode", o.opcode)
+        return o
+
+
+access_re = re.compile('_index\((.*)\)')
+args_re = re.compile('\[(.*)]')
+
+# Auxiliary functions
+
+
+def idx_from_access(access: str) -> int:
+    return int(re.search(access_re, access).group(1))
+
+
+def arguments_from_instr(instr: str) -> typing.List[str]:
+    return list(re.search(args_re, instr).group(1).split(','))
 
 # ======================================================================================================================
 # Binary Format Modules
