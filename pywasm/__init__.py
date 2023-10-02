@@ -129,8 +129,11 @@ def symbolic_exec_from_block(file_name: str):
         instrs = [binary.Instruction.from_plain_repr(plain_instr, function_addresses) for plain_instr in plain_instrs]
 
         # We retrieve the maximum index accessed from the locals and globals
-        n_locals = max(instr.args[0] for instr in instrs if 'local' in instr.name) + 1
-        n_globals = max(instr.args[0] for instr in instrs if 'global' in instr.name) + 1
+        local_args = [instr.args[0] for instr in instrs if 'local' in instr.name]
+        n_locals = max(local_args) + 1 if len(local_args) > 0 else 0
+
+        global_args = [instr.args[0] for instr in instrs if 'global' in instr.name]
+        n_globals = max(global_args) + 1 if len(global_args) > 0 else 0
         execution.symbolic_execution_from_instrs(instrs, function_addresses, n_locals, n_globals)
 
 
