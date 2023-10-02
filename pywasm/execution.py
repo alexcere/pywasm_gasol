@@ -276,7 +276,10 @@ class StackVarFactory:
         self._value2var[term_repr] = var_list
 
     def vars(self) -> typing.List[str]:
-        return [self._value2var[term_repr][0] for term_repr in self._accessed if len(self._value2var[term_repr]) == 1]
+        # There can be call accesses that returns multiple values and one of those values is never accessed, but must
+        # be included in vars. Hence, we need to include it (inner for) and ensure each var is not repeated twice but
+        # obtaining a set and then transforming it in a list.
+        return list(set(stack_var for term_repr in self._accessed for stack_var in self._value2var[term_repr]))
 
 
 class Result:
