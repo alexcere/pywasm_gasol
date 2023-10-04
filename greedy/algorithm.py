@@ -4,8 +4,10 @@ import json
 import sys
 import os
 from typing import List, Dict, Tuple, Any, Set
-from collections import defaultdict
+from collections import defaultdict, Counter
 import traceback
+from enum import Enum, unique
+import networkx as nx
 
 # General types we are using
 var_T = str
@@ -30,34 +32,100 @@ def set_local_value(x: int, cstack: List[var_T], clocals: List[var_T]) -> Tuple[
     return cstack, clocals
 
 
-def iterative_topological_sort(graph: Dict, initial_node) -> List:
-    seen = set()
-    stack = []    # path variable is gone, stack and order are new
-    order = []    # order will be in reverse order at first
-    q = [initial_node]
-    while q:
-        v = q.pop()
-        if v not in seen:
-            seen.add(v)
-            q.extend(graph[v])
-
-            while stack and v not in graph[stack[-1]]:
-                order.append(stack.pop())
-            stack.append(v)
-
-    return stack + order[::-1]   # new return value!
+@unique
+class Location(Enum):
+    stack = 0
+    local = 1
 
 
-def toposort_instr_dependencies(graph: Dict) -> List:
-    maximal_elements = list(set(instr_id for instr_id in graph).difference(
-        set(instr_id for id_list in graph.values() for instr_id in id_list)))
-    extended_dependency_graph = graph.copy()
+class SymbolicState:
+    """
+    A symbolic state includes a stack, the register (locals) and the liveness analysis from the stack
+    """
 
-    # We add a "dummy element" to function as the initial value
-    extended_dependency_graph['dummy'] = maximal_elements
-    topo_order = iterative_topological_sort(extended_dependency_graph, 'dummy')
-    topo_order.pop(0)
-    return topo_order
+    def __init__(self, stack: List[var_T], locals_: List[var_T], liveness: List[bool], debug_mode: bool = True) -> None:
+        self.stack: List[var_T] = stack
+        self.locals: List[var_T] = locals_
+        self.liveness: List[bool] = liveness
+        self.debug_mode: bool = debug_mode
+        self._var2position: Dict[var_T, List[Tuple[Location, int]]] = self._compute_var2position()
+        self.var_uses = self._computer_var_uses()
+
+    def _compute_var2position(self) -> Dict[var_T, List[Tuple[Location, int]]]:
+        var2pos = defaultdict(lambda: [])
+        for i, stack_var in enumerate(self.stack):
+            var2pos[stack_var].append((Location.stack, i))
+
+        for i, stack_var in enumerate(self.locals):
+            var2pos[stack_var].append((Location.local, i))
+
+        return var2pos
+
+    def _computer_var_uses(self):
+        var_uses = defaultdict(lambda: 0)
+
+        # Count vars in the initial stack
+        for var_stack in self.stack:
+            var_uses[var_stack] += 1
+
+        # Count vars in the initial locals
+        for var_stack in self.locals:
+            var_uses[var_stack] += 1
+
+        return var_uses
+
+    def var_locations(self, var: var_T) -> List[Tuple[Location, int]]:
+        return self._var2position.get(var, [])
+
+    def select_local_from_value(self, value: var_T) -> local_index_T:
+        """
+        Returns the first local in the list which contains the corresponding value. Otherwise, raises an Exception.
+        """
+        return self.locals.index(value)
+
+    def lset(self, x: int) -> None:
+        """
+        Stores the top of the stack in the local with index x
+        """
+        self.locals[x] = self.stack.pop(0)
+
+    def ltee(self, x: int) -> None:
+        """
+        Tee instruction in local with index x
+        """
+        self.locals[x] = self.stack[0]
+
+    def lget(self, x: int) -> var_T:
+        """
+        Get instruction in local x
+        """
+        return self.locals[x]
+
+    def drop(self):
+        """
+        Drops the last element
+        """
+        self.stack.pop(0)
+
+    def uf(self, instr: instr_T):
+        """
+        Symbolic execution of instruction instr. Additionally, checks the arguments match if debug mode flag is enabled
+        """
+        consumed_elements = [self.stack.pop(0) for _ in range(len(instr['inpt_sk']))]
+
+        # Debug mode to check the pop args from the stack match
+        if self.debug_mode:
+            if instr['comm']:
+                # Compare them as multisets
+                return Counter(consumed_elements) == Counter(instr['inpt_sk'])
+            else:
+                # Compare them as lists
+                return consumed_elements == instr['inpt_sk']
+
+        # We introduce the new elements
+        for output_var in instr['outpt_sk']:
+            self.stack.insert(0, output_var)
+
 
 
 class SMSgreedy:
@@ -68,7 +136,7 @@ class SMSgreedy:
         self._b0: int = json_format["init_progr_len"]
         self._initial_stack: List[var_T] = json_format['src_ws']
         self._final_stack: List[var_T] = json_format['tgt_ws']
-        self._variables: List[var_T] = json_format['vars']
+        self._vars: List[var_T] = json_format['vars']
         self._deps: List[Tuple[id_T, id_T]] = json_format['dependencies']
         self._max_registers: int = json_format['max_registers_sz']
         self._local_changes: List[Tuple[var_T, var_T]] = json_format['register_changes']
@@ -84,6 +152,17 @@ class SMSgreedy:
 
         self._var_total_uses = self._compute_var_total_uses()
         self._var_current_uses = self._computer_var_current_uses()
+        self._dep_graph = self._compute_dependency_graph()
+        self._trans_dep_graph = nx.transitive_closure_dag(self._dep_graph)
+        # print(nx.find_cycle(self._dep_graph))
+
+        # Nx interesting functions
+        # nx.transitive_closure_dag()
+        # nx.transitive_reduction()
+        # nx.nx_pydot.write_dot()
+        # nx.find_cycle() # for debugging
+        with open('example.dot', 'w') as f:
+            nx.nx_pydot.write_dot(self._dep_graph, f)
 
         # We include another list of local variables to indicate whether it is live or not
         # Condition: a variable is live if it is used somewhere else, or it is in its correct position.
@@ -92,9 +171,7 @@ class SMSgreedy:
         self._local_liveness: List[bool] = [self._var_current_uses[initial_var] < self._var_total_uses[initial_var]
                                             for initial_var in self._initial_locals]
 
-        self._dependency_graph, self._full_dependency_graph = self._compute_full_dependency_graph_elem()
-
-        self._mops, self._sops, self._rops = self.split_ids_into_categories()
+        self._mops, self._sops, self._lops, self._rops = self.split_ids_into_categories()
 
         self._needed_in_stack_map = {}
         self._dup_stack_ini = 0
@@ -139,58 +216,31 @@ class SMSgreedy:
 
         return var_uses
 
-    def _compute_dependency_graph_elem(self, current_id: id_T, analyzed: Set[id_T],
-                                       immediate_dependency_graph: Dict[id_T, List[id_T]],
-                                       full_dependency_graph: Dict[id_T, Set[id_T]]):
-        if current_id in analyzed:
-            return
-
-        instr = self._id2instr[current_id]
-        analyzed.add(current_id)
-        for input_var in instr['inpt_sk']:
-            # This means the stack element corresponds to another uninterpreted instruction
-            if input_var in self._var2instr:
-                dep_id = self._var2instr[input_var]['id']
-                immediate_dependency_graph[current_id].append(dep_id)
-                full_dependency_graph[current_id].add(dep_id)
-
-                self._compute_dependency_graph_elem(dep_id, analyzed, immediate_dependency_graph, full_dependency_graph)
-                full_dependency_graph[current_id].update(full_dependency_graph[dep_id])
-
-    def _compute_full_dependency_graph_elem(self) -> Tuple[Dict[id_T, List[id_T]], Dict[id_T, Set[id_T]]]:
-        immediate_dependency_graph = defaultdict(lambda: [])
-        full_dependency_graph = defaultdict(lambda: set())
-        analyzed = set()
+    def _compute_dependency_graph(self) -> nx.DiGraph:
+        edge_list = []
         for instr in self._user_instr:
             instr_id = instr['id']
-            self._compute_dependency_graph_elem(instr_id, analyzed, immediate_dependency_graph, full_dependency_graph)
-
-        # We need to consider also the order given by the tuples
-        for id1, id2 in self._deps:
-            immediate_dependency_graph[id2].append(id1)
-
-            # To update the full dependency graph, we just need to include both the new term and its subterms
-            full_dependency_graph[id2].add(id1)
-            full_dependency_graph[id2].update(full_dependency_graph[id1])
-
-        return immediate_dependency_graph, full_dependency_graph
-
-    def _compute_dependency_graph(self) -> Dict[id_T, List[id_T]]:
-        dependency_graph = {}
-        for instr in self._user_instr:
-            instr_id = instr['id']
-            dependency_graph[instr_id] = []
 
             for stack_elem in instr['inpt_sk']:
                 # This means the stack element corresponds to another uninterpreted instruction
                 if stack_elem in self._var2instr:
-                    dependency_graph[instr_id].append(self._var2instr[stack_elem]['id'])
+                    edge_list.append((self._var2id[stack_elem], instr_id))
+                # Otherwise, it corresponds to either a local or an initial element in the stack. We just add locals
+                elif 'local' in stack_elem:
+                    edge_list.append((stack_elem, instr_id))
 
         # We need to consider also the order given by the tuples
         for id1, id2 in self._deps:
-            dependency_graph[id2].append(id1)
+            edge_list.append((id1, id2))
 
-        return dependency_graph
+        # Also, the dependencies induced among locals that are live
+        for ini_var, final_var in self._local_changes:
+            # Either final var corresponds to a computation and appears in var2id or it is another local, which
+            # we are referencing using the same name
+            final_id = self._var2id.get(final_var, final_var)
+            edge_list.append((ini_var, final_id))
+
+        return nx.transitive_reduction(nx.DiGraph(edge_list))
 
     def _choose_local_to_store(self, var_elem: var_T, clocals_liveness: List[bool]) -> local_index_T:
         """
@@ -209,17 +259,30 @@ class SMSgreedy:
         return next((i for i in range(len(clocals_liveness) - 1, -1, -1) if clocals_liveness[i]),
                     len(clocals_liveness))
 
-    def split_ids_into_categories(self) -> Tuple[Set[id_T], List[id_T], Set[id_T]]:
+    def _can_be_computed(self, var_elem: var_T) -> bool:
         """
-        Returns three set of instruction ids: the ones that have some kind of dependency (mops), the ones that appear in
-        fstack with no dependency (sops) and the remaining ones (rops). This is useful to choose with computation used.
-        The oterder
+        A var element can be computed if it has no dependencies with instructions that have not been computed yet
+        """
+        instr_id = self._var2id.get(var_elem, None)
+        # This should never contain a value
+        assert instr_id is not None
+        return True
+
+    def split_ids_into_categories(self) -> Tuple[Set[id_T], List[id_T], Set[id_T], Set[id_T]]:
+        """
+        Returns four sets of instruction ids: the ones that have some kind of dependency (mops), the ones that appear in
+        fstack with no dependency (sops), the maximal elements that appear in flocals with no dependencies (lops)
+        and the remaining ones (rops).
+        This is useful to choose with computation used.
         """
         mops = {id_ for dep in self._deps for id_ in dep}
         sops = [self._var2id[stack_var] for stack_var in self._final_stack
                 if stack_var in self._var2id and self._var2id[stack_var] not in mops]
-        rops = set(self._id2instr.keys()).difference(mops.union(sops))
-        return mops, sops, rops
+        lops = {self._var2id[stack_var] for stack_var in self._final_locals
+                if stack_var in self._var2id and self._var2id[stack_var] not in mops and
+                self._var_total_uses[stack_var] == 1}
+        rops = set(self._id2instr.keys()).difference(mops.union(sops).union(lops))
+        return mops, sops, lops, rops
 
     def permutation(self) -> bool:
         pass
@@ -231,8 +294,7 @@ class SMSgreedy:
         """
         # As the dependency relation among instructions is represented as a happens-before, we need to reverse the
         # toposort to start with the deepest elementsh
-        topo_order = reversed(toposort_instr_dependencies(self._dependency_graph))
-
+        topo_order = nx.topological_sort(self._dep_graph)
         # We must extract the order that only includes ids from mops
         return [id_ for id_ in topo_order if id_ in mops]
 
@@ -251,14 +313,47 @@ class SMSgreedy:
                 return True
         return False
 
-    def move_top_to_position(self, var_elem: var_T, cstack: List[var_T]) -> List[id_T]:
+    def move_top_to_position(self, var_elem: var_T, cstack: List[var_T], clocals: List[var_T],
+                             clocals_liveness: List[var_T]) -> List[id_T]:
+        """
+        Move top to position assumes the stack element is not in their corresponding position.
+        If it must appear more than once, we move it to a local to duplicate it (checking if it appears in flocals).
+        Otherwise,
+        """
         pass
 
-    def choose_next_computation(self) -> id_T:
+    def choose_next_computation(self, mops: List[id_T], sops: List[id_T], rops: Set[id_T],
+                                cstack: List[var_T], clocals: List[var_T], clocals_liveness: List[bool]) -> id_T:
+        """
+        TODO: Here we should try to devise a good heuristics to select the terms
+        """
+        # First we try updating locals that are not live
+        for x, final_var in enumerate(self._final_locals):
+            if not clocals_liveness[x]:
+                var_instr_id = self._var2id.get(final_var, None)
+                if var_instr_id is not None:
+                    return var_instr_id
+
+        # We first prioritize the next element in the stack if it is possible to compute directly
+        next_element = sops[0]
+        if self._can_be_computed(next_element):
+            return next_element
+
+        # Finally, we just compute the next element from mops (which is always assumed to be computed)
+        if self._can_be_computed(mops[0]):
+            return mops[0]
+
+        # This case should never be reached
+        raise AssertionError('Choose next computation found an unexpected case')
+
+    def compute_op(self, mops: List[id_T], sops: List[id_T], rops: Set[id_T], cstack: List[var_T],
+                   clocals: List[var_T], clocals_liveness: List[bool]) -> List[id_T]:
         pass
 
-    def compute_opt(self) -> List[id_T]:
+    def choose_subterm_order(self, mops: List[id_T], sops: List[id_T], rops: Set[id_T], cstack: List[var_T],
+                             clocals: List[var_T], clocals_liveness: List[bool]) -> List[id_T]:
         pass
+
 
     def solve_permutation(self, cstack: List[var_T], clocals: List[var_T]) -> List[id_T]:
         """
@@ -301,35 +396,36 @@ class SMSgreedy:
 
         # We split into three sets: mops (operations with dependencies), sops (elements that appear in fstack
         # that do not appear in mops) and rops (other operations with no restrictions)
-        mops_unsorted, sops, rops = self._mops.copy(), self._sops.copy(), self._rops.copy()
+        mops_unsorted, sops, lops = self._mops.copy(), self._sops.copy(), self._lops.copy()
         seq: List[id_T] = []
         mops: List[id_T] = self.select_memory_ops_order(mops_unsorted)
         maximal_vars: List[id_T] = []
-        print(mops)
-        # optg: List[id_T] = []
-        # while mops != []:
-        #     var_top = cstack[0] if len(cstack) > 0 else None
-        #
-        #     # Top of the stack must be removed, as it appears more time it is being used
-        #     if var_top is not None and self._var_current_uses[var_top] > self._var_total_uses[var_top]:
-        #         # Decrease the number of occurrences and remove it from the stack
-        #         self._var_current_uses[var_top] -= 1
-        #         cstack.pop(0)
-        #         optg.append("drop")
-        #
-        #     # Top of the stack must be placed in the position it appears in the fstack or flocals
-        #     elif var_top is not None and not self.is_in_position_stack(var_top, cstack):
-        #         optg.extend(self.move_top_to_position(var_top, cstack))
-        #
-        #     # Top of the stack cannot be moved to the corresponding position. As there is always the possibility
-        #     # of storing in locals, this means that either the stack is empty or the current top of the stack
-        #     # is already placed in the corresponding position. Hence, we just generate the following computation
-        #     else:
-        #         next_computation, mops = self.choose_next_computation()
-        #         ops = self.choose_subterm_order()
-        #         optg.extend(ops)
-        #
-        # optg.extend(self.solve_permutation(cstack, clocals))
+
+        optg: List[id_T] = []
+
+        while mops != [] or sops != [] or lops != []:
+            var_top = cstack[0] if len(cstack) > 0 else None
+
+            # Top of the stack must be removed, as it appears more time it is being used
+            if var_top is not None and self._var_current_uses[var_top] > self._var_total_uses[var_top]:
+                # Decrease the number of occurrences and remove it from the stack
+                self._var_current_uses[var_top] -= 1
+                cstack.pop(0)
+                optg.append("drop")
+
+            # Top of the stack must be placed in the position it appears in the fstack or flocals
+            elif var_top is not None and not self.is_in_position_stack(var_top, cstack):
+                optg.extend(self.move_top_to_position(var_top, cstack, clocals, clocals_liveness))
+
+            # Top of the stack cannot be moved to the corresponding position. As there is always the possibility
+            # of storing in locals, this means that either the stack is empty or the current top of the stack
+            # is already placed in the corresponding position. Hence, we just generate the following computation
+            else:
+                next_computation = self.choose_next_computation(mops, sops, lops, cstack, clocals, clocals_liveness)
+                ops = self.choose_subterm_order(mops, sops, lops, cstack, clocals, clocals_liveness)
+                optg.extend(ops)
+
+        optg.extend(self.solve_permutation(cstack, clocals))
 
 
 if __name__ == "__main__":
