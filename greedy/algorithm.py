@@ -3,7 +3,7 @@
 import json
 import sys
 import os
-from typing import List, Dict, Tuple, Any, Set
+from typing import List, Dict, Tuple, Any, Set, Optional
 from collections import defaultdict, Counter
 import traceback
 from enum import Enum, unique
@@ -32,6 +32,10 @@ def set_local_value(x: int, cstack: List[var_T], clocals: List[var_T]) -> Tuple[
     return cstack, clocals
 
 
+def extract_idx_from_id(instr_id: str) -> int:
+    return int(instr_id.split('_')[-1])
+
+
 @unique
 class Location(Enum):
     stack = 0
@@ -40,26 +44,17 @@ class Location(Enum):
 
 class SymbolicState:
     """
-    A symbolic state includes a stack, the register (locals) and the liveness analysis from the stack
+    A symbolic state includes a stack, the register (locals) and a dict indicating the number of total uses of each
+    instruction. With this dict, we can determine the liveness analysis
     """
 
-    def __init__(self, stack: List[var_T], locals_: List[var_T], liveness: List[bool], debug_mode: bool = True) -> None:
+    def __init__(self, stack: List[var_T], locals_: List[var_T], total_uses: Dict[id_T, int], debug_mode: bool = True) -> None:
         self.stack: List[var_T] = stack
         self.locals: List[var_T] = locals_
-        self.liveness: List[bool] = liveness
+        self.total_uses: Dict[id_T, int] = total_uses
         self.debug_mode: bool = debug_mode
-        self._var2position: Dict[var_T, List[Tuple[Location, int]]] = self._compute_var2position()
         self.var_uses = self._computer_var_uses()
-
-    def _compute_var2position(self) -> Dict[var_T, List[Tuple[Location, int]]]:
-        var2pos = defaultdict(lambda: [])
-        for i, stack_var in enumerate(self.stack):
-            var2pos[stack_var].append((Location.stack, i))
-
-        for i, stack_var in enumerate(self.locals):
-            var2pos[stack_var].append((Location.local, i))
-
-        return var2pos
+        self.liveness: List[bool] = self._compute_initial_liveness()
 
     def _computer_var_uses(self):
         var_uses = defaultdict(lambda: 0)
@@ -74,8 +69,13 @@ class SymbolicState:
 
         return var_uses
 
-    def var_locations(self, var: var_T) -> List[Tuple[Location, int]]:
-        return self._var2position.get(var, [])
+    def _compute_initial_liveness(self) -> List[bool]:
+        """
+        Condition: a variable is live if it is used somewhere else, or it is in its correct position.
+        As we are considering just the variables with some kind of change for locals, we just need to check if
+        it's used somewhere else (i.e. it is used somewhere else)
+        """
+        return [self.var_uses[initial_var] < self.total_uses[initial_var] for initial_var in self.locals]
 
     def select_local_from_value(self, value: var_T) -> local_index_T:
         """
@@ -83,35 +83,67 @@ class SymbolicState:
         """
         return self.locals.index(value)
 
-    def lset(self, x: int) -> None:
+    def lset(self, x: int, in_position: bool) -> None:
         """
-        Stores the top of the stack in the local with index x
+        Stores the top of the stack in the local with index x. in_position marks whether the element is
+        solved in flocals
         """
-        self.locals[x] = self.stack.pop(0)
+        stack_var = self.stack.pop(0)
+        self.locals[x] = stack_var
 
-    def ltee(self, x: int) -> None:
+        # Var uses: if the local is solved, we are placing in its position and the var uses remains. Otherwise, as
+        # we are storing it elsewhere, we are effectively removing one appearance
+        self.var_uses[stack_var] += 0 if in_position else -1
+
+        # Liveness: the variable is stored either in a position it must appear (hence, live) or to be used afterwards
+        # Therefore, it is always live
+        self.liveness[x] = True
+
+    def ltee(self, x: int, in_position: bool) -> None:
         """
-        Tee instruction in local with index x
+        Tee instruction in local with index x. in_position marks whether the element is solved in flocals
         """
-        self.locals[x] = self.stack[0]
+        stack_var = self.stack[0]
+        self.locals[x] = stack_var
+
+        # Var uses: same reasoning as lget, but now we are both placing an element in its position and keeping it
+        # computed.
+        self.var_uses[stack_var] += 1 if in_position else 0
+
+        # Liveness: the variable is stored either in a position it must appear (hence, live) or to be used afterwards
+        # Therefore, it is always live
+        self.liveness[x] = True
 
     def lget(self, x: int) -> var_T:
         """
         Get instruction in local x
         """
-        return self.locals[x]
+        stack_var = self.locals[x]
+
+        # Var uses: increased in one
+        self.var_uses[stack_var] += 1
+
+        # Liveness: the variable is still live if it needs to be used elsewhere
+        self.liveness[x] = self.var_uses[stack_var] < self.total_uses[stack_var]
+        return stack_var
 
     def drop(self):
         """
         Drops the last element
         """
-        self.stack.pop(0)
+        stack_var = self.stack.pop(0)
+        # Var uses: we subtract one because the stack var is totally removed from the encoding
+        self.var_uses[stack_var] -= 1
+        # Liveness: not affected by dropping an element
 
     def uf(self, instr: instr_T):
         """
         Symbolic execution of instruction instr. Additionally, checks the arguments match if debug mode flag is enabled
         """
         consumed_elements = [self.stack.pop(0) for _ in range(len(instr['inpt_sk']))]
+
+        # Neither liveness nor var uses are affected by consuming elements, as these elements are just being embedded
+        # into a new term
 
         # Debug mode to check the pop args from the stack match
         if self.debug_mode:
@@ -125,6 +157,18 @@ class SymbolicState:
         # We introduce the new elements
         for output_var in instr['outpt_sk']:
             self.stack.insert(0, output_var)
+
+            # Var uses: increase one for each generated stack var
+            self.var_uses[output_var] += 1
+
+            # Liveness: not affected because we are not managing the stack
+
+    def top_stack(self) -> Optional[var_T]:
+        return None if len(self.stack) == 0 else self.stack[0]
+
+    def __repr__(self):
+        sentences = [f"Current stack: {self.stack}", "Current locals:", *(f"{local}: {liveness}" for local, liveness in zip(self.locals, self.liveness))]
+        return '\n'.join(sentences)
 
 
 
@@ -149,9 +193,9 @@ class SMSgreedy:
         self._var2instr = {var: ins for ins in self._user_instr for var in ins['outpt_sk']}
         self._id2instr = {ins['id']: ins for ins in self._user_instr}
         self._var2id = {var: ins['id'] for ins in self._user_instr for var in ins['outpt_sk']}
+        self._var2pos = self._compute_var2pos()
 
         self._var_total_uses = self._compute_var_total_uses()
-        self._var_current_uses = self._computer_var_current_uses()
         self._dep_graph = self._compute_dependency_graph()
         self._trans_dep_graph = nx.transitive_closure_dag(self._dep_graph)
         # print(nx.find_cycle(self._dep_graph))
@@ -168,14 +212,8 @@ class SMSgreedy:
         # Condition: a variable is live if it is used somewhere else, or it is in its correct position.
         # As we are considering just the variables with some kind of change for locals, we just need to check if
         # it's used somewhere else (i.e. it is used somewhere else)
-        self._local_liveness: List[bool] = [self._var_current_uses[initial_var] < self._var_total_uses[initial_var]
-                                            for initial_var in self._initial_locals]
 
         self._mops, self._sops, self._lops, self._rops = self.split_ids_into_categories()
-
-        self._needed_in_stack_map = {}
-        self._dup_stack_ini = 0
-        self.uses = {}
 
     def _compute_var_total_uses(self) -> Dict[var_T, int]:
         """
@@ -199,22 +237,15 @@ class SMSgreedy:
 
         return var_uses
 
-    def _computer_var_current_uses(self) -> Dict[var_T, int]:
-        """
-        Computes how many times are initially computed, i.e. 0 if terms do not appear in the initial stack or initial
-        locals, x otherwise (probably 1 because initial elements are different, but this could change in the future)
-        """
-        var_uses = defaultdict(lambda: 0)
+    def _compute_var2pos(self):
+        var2pos = defaultdict(lambda: [])
+        for i, stack_var in enumerate(self._final_stack):
+            var2pos[stack_var].append((Location.stack, i))
 
-        # Count vars in the initial stack
-        for var_stack in self._initial_stack:
-            var_uses[var_stack] += 1
+        for i, stack_var in enumerate(self._final_locals):
+            var2pos[stack_var].append((Location.local, i))
 
-        # Count vars in the initial locals
-        for var_stack in self._initial_locals:
-            var_uses[var_stack] += 1
-
-        return var_uses
+        return var2pos
 
     def _compute_dependency_graph(self) -> nx.DiGraph:
         edge_list = []
@@ -298,9 +329,9 @@ class SMSgreedy:
         # We must extract the order that only includes ids from mops
         return [id_ for id_ in topo_order if id_ in mops]
 
-    def is_in_position_stack(self, var_elem: var_T, cstack: List[var_T]) -> bool:
+    def is_in_position_stack(self, var_elem: var_T, cstate: SymbolicState) -> bool:
         # Var elem has position 0 in cstack, hence why new pos ic computed this way
-        new_pos = len(cstack) - len(self._final_stack)
+        new_pos = len(cstate.stack) - len(self._final_stack)
         # Check it is within range and
         return 0 <= new_pos < len(self._final_stack) and self._final_stack[new_pos] == var_elem
 
@@ -313,8 +344,7 @@ class SMSgreedy:
                 return True
         return False
 
-    def move_top_to_position(self, var_elem: var_T, cstack: List[var_T], clocals: List[var_T],
-                             clocals_liveness: List[var_T]) -> List[id_T]:
+    def move_top_to_position(self, var_elem: var_T, cstate: SymbolicState) -> List[id_T]:
         """
         Move top to position assumes the stack element is not in their corresponding position.
         If it must appear more than once, we move it to a local to duplicate it (checking if it appears in flocals).
@@ -355,44 +385,43 @@ class SMSgreedy:
         pass
 
 
-    def solve_permutation(self, cstack: List[var_T], clocals: List[var_T]) -> List[id_T]:
-        """
-        After all terms have been computed, solve_permutation places all elements in their
-        corresponding place.
-        """
-        optp = []
-        stack_idx = len(self._final_stack) - len(cstack) - 1
-
-        # First we solve the values in the stack
-        while stack_idx >= 0:
-            # The corresponding value must be stored in some local register
-            x = select_local_from_value(self._final_stack[stack_idx], clocals)
-            cstack.append(clocals[x])
-            optp.append(f"local.get[{x}]")
-            stack_idx -= 1
-
-        # Then we detect which locals have a value that appears in flocals and load them onto the stack
-        outdated_locals = []
-        for local_idx in range(len(self._final_locals)):
-            if self._final_locals[local_idx] != clocals[local_idx]:
-                x = select_local_from_value(self._final_locals[local_idx], clocals)
-                outdated_locals.append(local_idx)
-                cstack.append(clocals[x])
-                optp.append(f"local.get[{x}]")
-
-            local_idx += 1
-
-        # Finally, we store them in the corresponding local in reversed order
-        for x in reversed(outdated_locals):
-            cstack, clocals = set_local_value(x, cstack, clocals)
-            optp.append(f"local.set[{x}]")
-
-        return optp
+    # def solve_permutation(self, cstate: SymbolicState) -> List[id_T]:
+    #     """
+    #     After all terms have been computed, solve_permutation places all elements in their
+    #     corresponding place.
+    #     """
+    #     optp = []
+    #     stack_idx = len(self._final_stack) - len(cstack) - 1
+    #
+    #     # First we solve the values in the stack
+    #     while stack_idx >= 0:
+    #         # The corresponding value must be stored in some local register
+    #         x = select_local_from_value(self._final_stack[stack_idx], clocals)
+    #         cstack.append(clocals[x])
+    #         optp.append(f"local.get[{x}]")
+    #         stack_idx -= 1
+    #
+    #     # Then we detect which locals have a value that appears in flocals and load them onto the stack
+    #     outdated_locals = []
+    #     for local_idx in range(len(self._final_locals)):
+    #         if self._final_locals[local_idx] != clocals[local_idx]:
+    #             x = select_local_from_value(self._final_locals[local_idx], clocals)
+    #             outdated_locals.append(local_idx)
+    #             cstack.append(clocals[x])
+    #             optp.append(f"local.get[{x}]")
+    #
+    #         local_idx += 1
+    #
+    #     # Finally, we store them in the corresponding local in reversed order
+    #     for x in reversed(outdated_locals):
+    #         cstack, clocals = set_local_value(x, cstack, clocals)
+    #         optp.append(f"local.set[{x}]")
+    #
+    #     return optp
 
     def greedy(self):
-        cstack: List[var_T] = self._initial_stack.copy()
-        clocals: List[var_T] = self._initial_locals.copy()
-        clocals_liveness: List[bool] = self._local_liveness.copy()
+        cstate: SymbolicState = SymbolicState(self._initial_stack.copy(), self._initial_locals.copy(),
+                                              self._var_total_uses)
 
         # We split into three sets: mops (operations with dependencies), sops (elements that appear in fstack
         # that do not appear in mops) and rops (other operations with no restrictions)
@@ -404,28 +433,27 @@ class SMSgreedy:
         optg: List[id_T] = []
 
         while mops != [] or sops != [] or lops != []:
-            var_top = cstack[0] if len(cstack) > 0 else None
+            var_top = cstate.top_stack()
 
             # Top of the stack must be removed, as it appears more time it is being used
-            if var_top is not None and self._var_current_uses[var_top] > self._var_total_uses[var_top]:
-                # Decrease the number of occurrences and remove it from the stack
-                self._var_current_uses[var_top] -= 1
-                cstack.pop(0)
+            if var_top is not None and cstate.var_uses[var_top] > self._var_total_uses[var_top]:
+                cstate.drop()
                 optg.append("drop")
 
             # Top of the stack must be placed in the position it appears in the fstack or flocals
-            elif var_top is not None and not self.is_in_position_stack(var_top, cstack):
-                optg.extend(self.move_top_to_position(var_top, cstack, clocals, clocals_liveness))
+            elif var_top is not None and not self.is_in_position_stack(var_top, cstate):
+                optg.extend(self.move_top_to_position(var_top, cstate))
 
             # Top of the stack cannot be moved to the corresponding position. As there is always the possibility
             # of storing in locals, this means that either the stack is empty or the current top of the stack
             # is already placed in the corresponding position. Hence, we just generate the following computation
             else:
-                next_computation = self.choose_next_computation(mops, sops, lops, cstack, clocals, clocals_liveness)
-                ops = self.choose_subterm_order(mops, sops, lops, cstack, clocals, clocals_liveness)
-                optg.extend(ops)
+                pass
+                #next_computation = self.choose_next_computation(mops, sops, lops, cstack, clocals, clocals_liveness)
+                #ops = self.choose_subterm_order(mops, sops, lops, cstack, clocals, clocals_liveness)
+                #optg.extend(ops)
 
-        optg.extend(self.solve_permutation(cstack, clocals))
+        # optg.extend(self.solve_permutation(cstate))
 
 
 if __name__ == "__main__":
