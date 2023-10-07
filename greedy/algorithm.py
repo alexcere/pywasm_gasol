@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+import itertools
 import json
 import sys
 import os
@@ -36,6 +36,13 @@ def top_relative_position_to_fstack(cstack: List[var_T], fstack: List[var_T]) ->
 
 def extract_idx_from_id(instr_id: str) -> int:
     return int(instr_id.split('_')[-1])
+
+
+def cheap(instr: instr_T) -> bool:
+    """
+    Cheap computations are those who take one instruction (i.e. inpt_sk is empty)
+    """
+    return len(instr['inpt_sk']) == 0
 
 
 @unique
@@ -236,6 +243,10 @@ class SMSgreedy:
 
         self._mops, self._sops, self._lops, self._rops = self.split_ids_into_categories()
 
+        # We need to compute the sub graph over the full dependency graph, as edges could be lost if we use the
+        # transitive reduction instead
+        self._trans_sub_graph = nx.transitive_reduction(self._dep_graph.subgraph(itertools.chain.from_iterable([self._mops, self._sops, self._lops])))
+
     def _compute_var_total_uses(self) -> Dict[var_T, int]:
         """
         Computes how many times each var appears either in the final stack, in the final locals or as a subterm
@@ -292,7 +303,7 @@ class SMSgreedy:
             final_id = self._var2id.get(final_var, final_var)
             edge_list.append((ini_var, final_id))
 
-        return nx.transitive_reduction(nx.DiGraph(edge_list))
+        return nx.DiGraph(edge_list)
 
     def _choose_local_to_store(self, var_elem: var_T, clocals_liveness: List[bool]) -> local_index_T:
         """
@@ -383,10 +394,10 @@ class SMSgreedy:
         """
         mops = {id_ for dep in self._deps for id_ in dep}
         sops = [self._var2id[stack_var] for stack_var in self._final_stack
-                if stack_var in self._var2id and self._var2id[stack_var] not in mops]
+                if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(self._var2instr[stack_var])]
         lops = {self._var2id[stack_var] for stack_var in self._final_locals
-                if stack_var in self._var2id and self._var2id[stack_var] not in mops and
-                self._var_total_uses[stack_var] == 1}
+                if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(self._var2instr[stack_var])
+                and self._var_total_uses[stack_var] == 1}
         rops = set(self._id2instr.keys()).difference(mops.union(sops).union(lops))
         return mops, sops, lops, rops
 
@@ -564,7 +575,7 @@ class SMSgreedy:
             # is already placed in the corresponding position. Hence, we just generate the following computation
             else:
                 pass
-                #next_computation = self.choose_next_computation(mops, sops, lops, cstack, clocals, clocals_liveness)
+                # next_computation = self.choose_next_computation(mops, sops, lops, cstack, clocals, clocals_liveness)
                 #ops = self.choose_subterm_order(mops, sops, lops, cstack, clocals, clocals_liveness)
                 #optg.extend(ops)
 
