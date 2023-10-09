@@ -200,7 +200,7 @@ def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     assert check_deps(final_instr_ids, dependencies), 'Dependencies are not coherent'
 
     # Check that the ids returned generate the final state
-    cstack, clocals_list = sfs['src_ws'], ilocals.copy()
+    cstack, clocals_list = sfs['src_ws'].copy(), ilocals.copy()
     flocal_list = [local_repr[1] for local_repr in local_changes]
 
     for instr_id in final_instr_ids:
