@@ -221,7 +221,8 @@ class SMSgreedy:
         self._var2instr = {var: ins for ins in self._user_instr for var in ins['outpt_sk']}
         self._id2instr = {ins['id']: ins for ins in self._user_instr}
         self._var2id = {var: ins['id'] for ins in self._user_instr for var in ins['outpt_sk']}
-        self._var2pos = self._compute_var2pos()
+        self._var2pos_stack = self._compute_var2pos(self._final_stack)
+        self._var2pos_locals = self._compute_var2pos(self._final_locals)
 
         self._var_total_uses = self._compute_var_total_uses()
         self._dep_graph = self._compute_dependency_graph()
@@ -269,13 +270,11 @@ class SMSgreedy:
 
         return var_uses
 
-    def _compute_var2pos(self) -> Dict[var_T, List[Tuple[Location, int]]]:
+    def _compute_var2pos(self, var_list: List[var_T]) -> Dict[var_T, List[int]]:
         var2pos = defaultdict(lambda: [])
-        for i, stack_var in enumerate(self._final_stack):
-            var2pos[stack_var].append((Location.stack, i))
 
-        for i, stack_var in enumerate(self._final_locals):
-            var2pos[stack_var].append((Location.local, i))
+        for i, stack_var in enumerate(var_list):
+            var2pos[stack_var].append(i)
 
         return var2pos
 
@@ -362,28 +361,42 @@ class SMSgreedy:
             local_to_retrieve = cstate.local_with_value(self._final_stack[idx])
         return ops
 
-    def _available_positions(self, var_elem: var_T, cstate: SymbolicState) -> Tuple[List[int], List[int]]:
+    def _available_positions_stack(self, var_elem: var_T, cstate: SymbolicState) -> List[int]:
         """
-        Returns the set of positions w.r.t stack and locals resp. in which we need to store the var elem
+        Returns the set of positions w.r.t stack. in which we need to store the var elem and are currently available
+        (i.e. there are enough elements)
         """
-        positions = self._var2pos[var_elem]
-
+        positions_stack = self._var2pos_stack[var_elem]
         positions_available_stack = []
-        positions_available_locals = []
 
         # We determine in which positions both in the stack (enough elements) and in the locals the element
         # can be placed at this moment
-        for location, x in positions:
-            if location == Location.stack:
-                idx_cstack = idx_wrt_cstack(x, cstate.stack, self._final_stack)
-                # Corresponding position in cstack
-                if idx_cstack >= 0:
-                    positions_available_locals.append(idx_cstack)
-            else:
-                if cstate.locals[x] != var_elem and not cstate.liveness[x]:
-                    positions_available_locals.append(x)
 
-        return positions_available_stack, positions_available_locals
+        for x in positions_stack:
+            idx_cstack = idx_wrt_cstack(x, cstate.stack, self._final_stack)
+            # Corresponding position in cstack
+            if idx_cstack >= 0:
+                positions_available_stack.append(idx_cstack)
+
+        return positions_available_stack
+
+    def _available_positions_locals(self, var_elem: var_T, cstate: SymbolicState) -> List[int]:
+        """
+        Returns the set of positions w.r.t locals in which it is possible to store the var elem (i.e. doesn't contain
+        it already and is not live)
+        """
+        positions_locals = self._var2pos_locals[var_elem]
+
+        return [x for x in positions_locals if cstate.locals[x] != var_elem and not cstate.liveness[x]]
+
+    def _locals_that_can_be_solved(self, var_elem: var_T, cstate: SymbolicState) -> List[int]:
+        """
+        Returns the set of positions in locals that can be solved: either they already contain the corresponding
+        element or are not live anymore. Allows reasoning on which local to choose
+        """
+        positions_locals = self._var2pos_locals[var_elem]
+        return [x for x in positions_locals if cstate.locals[x] == var_elem or not cstate.liveness[x]]
+
 
     def split_ids_into_categories(self) -> Tuple[Set[id_T], List[id_T], Set[id_T], Set[id_T]]:
         """
@@ -411,7 +424,7 @@ class SMSgreedy:
         """
         # As the dependency relation among instructions is represented as a happens-before, we need to reverse the
         # toposort to start with the deepest elementsh
-        topo_order = nx.topological_sort(self._dep_graph)
+        topo_order = nx.topological_sort(self._trans_dep_graph)
         # We must extract the order that only includes ids from mops
         return [id_ for id_ in topo_order if id_ in mops]
 
@@ -420,11 +433,15 @@ class SMSgreedy:
         By construction, a var element must be moved if it appears in no locals, unless it has one position tied which
         corresponds to current top of the stack
         """
-        positions = self._var2pos[var_elem]
+        positions_stack = self._var2pos_stack[var_elem]
+        positions_locals = self._var2pos_locals[var_elem]
+
         local = cstate.local_with_value(var_elem)
 
-        assert len(positions) > 0, f'Variable {var_elem} does not appear anywhere else!'
-        return local == -1 or len(positions) > 1 or positions[0][0] != 'stack' or idx_wrt_cstack(positions[0][1], cstate.stack, self._final_stack) != 0
+        # Initial stack elements are not stored in locals and hence, they satisfy that local == -1. Otherwise, it is
+        # an element already considered, and we just need to move it if it is not in its position
+        return (local == -1 or len(positions_stack) + len(positions_locals) > 1 or
+                idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) != 0)
 
     def can_be_placed_in_position(self, var_elem: var_T, clocals: List[var_T], clocals_liveness: List[bool]) -> bool:
         """
@@ -440,7 +457,8 @@ class SMSgreedy:
         Tries to store current element in all the positions in which it is available to be moved
         """
         ops = []
-        positions_available_locals, positions_available_stack = self._available_positions(var_elem, cstate)
+        positions_available_locals = self._available_positions_locals(var_elem, cstate)
+        positions_available_stack = self._available_positions_stack(var_elem, cstate)
 
         if len(positions_available_locals) == 0:
             # No position is available yet, so we just store it one available local
@@ -478,29 +496,60 @@ class SMSgreedy:
 
         return ops
 
-    def choose_next_computation(self, mops: List[id_T], sops: List[id_T], rops: Set[id_T],
-                                cstack: List[var_T], clocals: List[var_T], clocals_liveness: List[bool]) -> id_T:
+    def choose_next_computation(self, cstate: SymbolicState, mops: List[id_T], sops: List[id_T], lops: Set[id_T]) -> Tuple[id_T, str]:
         """
+        Returns an element from mops, sops or lops and where it came from (mops, sops or lops)
         TODO: Here we should try to devise a good heuristics to select the terms
         """
-        # First we try updating locals that are not live
-        for x, final_var in enumerate(self._final_locals):
-            if not clocals_liveness[x]:
-                var_instr_id = self._var2id.get(final_var, None)
-                if var_instr_id is not None:
-                    return var_instr_id
 
-        # We first prioritize the next element in the stack if it is possible to compute directly
-        next_element = sops[0]
-        if self._can_be_computed(next_element):
-            return next_element
+        # First we try to assign the next element which is top of the stack
+        if len(sops) > 0:
+            top_id = sops[0]
+            top_instr = self._id2instr[top_id]
 
-        # Finally, we just compute the next element from mops (which is always assumed to be computed)
-        if self._can_be_computed(mops[0]):
-            return mops[0]
+            # If it is cheap to compute or has no dependencies, we can choose it
+            if cheap(top_instr) or self._trans_sub_graph.out_degree(top_id) == 0:
+                return top_id, 'sops'
 
-        # This case should never be reached
-        raise AssertionError('Choose next computation found an unexpected case')
+        # To determine the best candidate, we annotate which element can solve the most number of locals for the same
+        # stack var. If > 1, we can chain one ltee that could save 1 instruction
+        candidate = None
+        max_number_solved = 0
+
+        # First we try to assign an element from the list of final local values if it can be placed in all the gaps
+        # We also determine the element which has more
+        for id_ in lops:
+            top_instr = self._id2instr[id_]
+
+            # TODO: future maybe allow choosing operations that had been already chosen to allow just computing them
+            #  from the stack and placing them in their positions
+
+            # If there is an operation whose produced elements can be placed in all locals, we choose that element
+            all_solved = True
+            number_solved = 0
+
+            # Call instructions might generate multiple values that we should take into account
+            # TODO: maybe resolve ties somehow?
+            for out_var in top_instr['outpt_sk']:
+                avail_solved_flocals = self._locals_that_can_be_solved(out_var, cstate)
+                pos_flocals = self._var2pos_locals[out_var]
+
+                # Current heuristics: select as a candidate the instruction with the most number of positions that
+                # can be solved
+                all_solved = all_solved and len(pos_flocals) == len(avail_solved_flocals)
+                number_solved = max(number_solved, len(avail_solved_flocals))
+
+            if all_solved:
+                return id_, 'lops'
+            elif number_solved > max_number_solved:
+                candidate = id_
+
+        # After that, we try to assign an element of mops (if there are any)
+        if len(mops) > 0:
+            return mops[0], 'mops'
+
+        # Finally, we just choose an element from locals that covers multiple gaps, which has been determined previously
+        return candidate, 'lops'
 
     def compute_op(self, mops: List[id_T], sops: List[id_T], rops: Set[id_T], cstack: List[var_T],
                    clocals: List[var_T], clocals_liveness: List[bool]) -> List[id_T]:
@@ -575,7 +624,7 @@ class SMSgreedy:
             # is already placed in the corresponding position. Hence, we just generate the following computation
             else:
                 pass
-                # next_computation = self.choose_next_computation(mops, sops, lops, cstack, clocals, clocals_liveness)
+                next_computation = self.choose_next_computation(cstate, mops, sops, lops)
                 #ops = self.choose_subterm_order(mops, sops, lops, cstack, clocals, clocals_liveness)
                 #optg.extend(ops)
 
