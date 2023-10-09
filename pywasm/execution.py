@@ -851,23 +851,29 @@ class AbstractConfiguration:
         # filtered_memory_accesses = process_memory_accesses(memory_accesses)
         global_accesses = [var_access for var_access in filtered_accesses if "global" in var_access[1].instr.name]
         if interesting_block(var_accesses):
-            print("")
-            print("Instructions:")
-            print('\n'.join([str(i) for i in basic_block]))
-            print("")
-            print("")
+            if global_params.DEBUG_MODE:
+                print("")
+                print("Instructions:")
+                print('\n'.join([str(i) for i in basic_block]))
+                print("")
+                print("")
+                print(f"Final state:")
+                self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
+
             json_sat = sfs_with_local_changes(initial_stack, self.stack, memory_accesses, global_accesses, call_accesses,
                                               basic_block, initial_locals, final_locals, self.max_stack_size, self.term2var)
-            store_json(json_sat, block_name)
+
+            if global_params.DEBUG_MODE:
+                json_initial = copy.deepcopy(json_sat)
+
             json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"],
                                                                                             json_sat["dependencies"])
             json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
             store_json(json_sat, block_name)
 
+            if global_params.DEBUG_MODE:
+                assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
             # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
-
-            print(f"Final state:")
-            self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
 
 
 def process_accesses(var_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]) -> typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]:
@@ -1499,7 +1505,6 @@ class ArithmeticLogicUnit:
     @staticmethod
     def call_symbolic(config: AbstractConfiguration, i: binary.Instruction, idx: int):
         instr = ArithmeticLogicUnit.instr_from_call(config, i)
-        print(instr, instr.out_arity)
         # We need to update the store to initialize new globals
         config.update_store()
         return symbolic_func(config, instr, idx)

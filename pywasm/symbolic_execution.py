@@ -208,8 +208,8 @@ def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     assert cstack == fstack, 'Ids - Stack do not match'
     assert clocals_list == flocal_list, 'Ids - Locals do not match'
 
-    print(final_instr_ids)
-    print("They match!")
+    # print(final_instr_ids)
+    # print("They match!")
     return final_instr_ids
 
 

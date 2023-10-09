@@ -16,12 +16,15 @@ def parse_args() -> Namespace:
     output_options = ap.add_argument_group('Output options')
     output_options.add_argument('-o', '--output', help="Folder to store blocks' specification",
                                 dest="final_folder", action='store')
+    output_options.add_argument('-d', '--debug', help='Debug mode enabled. Prints extra information',
+                                action='store_true', dest='debug_mode')
     return ap.parse_args()
 
 
 def initialize(arguments: Namespace) -> None:
     if arguments.final_folder is not None:
         pywasm.global_params.FINAL_FOLDER = Path(arguments.final_folder)
+    pywasm.global_params.DEBUG_MODE = arguments.debug_mode
 
 
 if __name__ == "__main__":
