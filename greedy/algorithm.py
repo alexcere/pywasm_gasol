@@ -45,6 +45,16 @@ def cheap(instr: instr_T) -> bool:
     return len(instr['inpt_sk']) == 0
 
 
+def remove_computation(id_: id_T, location: str, mops: List[id_T], sops: List[id_T], lops: Set[id_T]) -> None:
+    if location == 'mops':
+        mops.pop(0)
+    elif location == 'sops':
+        sops.pop(0)
+    elif location == 'lops':
+        lops.remove(id_)
+    raise ValueError(f"Location {location} in _remove_computation is not valid")
+
+
 @unique
 class Location(Enum):
     stack = 0
@@ -131,6 +141,7 @@ class SymbolicState:
         Get instruction in local x
         """
         stack_var = self.locals[x]
+        self.stack.append(stack_var)
 
         # Var uses: increased in one
         self.var_uses[stack_var] += 1
@@ -148,7 +159,7 @@ class SymbolicState:
         self.var_uses[stack_var] -= 1
         # Liveness: not affected by dropping an element
 
-    def uf(self, instr: instr_T):
+    def uf(self, instr: instr_T) -> List[var_T]:
         """
         Symbolic execution of instruction instr. Additionally, checks the arguments match if debug mode flag is enabled
         """
@@ -161,10 +172,12 @@ class SymbolicState:
         if self.debug_mode:
             if instr['comm']:
                 # Compare them as multisets
-                return Counter(consumed_elements) == Counter(instr['inpt_sk'])
+                assert Counter(consumed_elements) == Counter(instr['inpt_sk']), \
+                    f"{instr['id']} is not consuming the correct elements from the stack"
             else:
                 # Compare them as lists
-                return consumed_elements == instr['inpt_sk']
+                assert consumed_elements == instr['inpt_sk'], \
+                    f"{instr['id']} is not consuming the correct elements from the stack"
 
         # We introduce the new elements
         for output_var in instr['outpt_sk']:
@@ -175,13 +188,14 @@ class SymbolicState:
 
             # Liveness: not affected because we are not managing the stack
 
+        return instr['outpt_sk']
+
     def top_stack(self) -> Optional[var_T]:
         return None if len(self.stack) == 0 else self.stack[0]
 
     def available_local(self) -> int:
         """
         Choose an available local to store an element. Otherwise, introduces an extra local to store it
-        :return:
         """
         # By reversing the liveness list, locals that have been introduced are prioritized over the ones that contain
         # valid values for the final stack
@@ -202,7 +216,7 @@ class SymbolicState:
 
 class SMSgreedy:
 
-    def __init__(self, json_format):
+    def __init__(self, json_format, debug_mode: bool = False):
         self._bs: int = json_format['max_sk_sz']
         self._user_instr: List[instr_T] = json_format['user_instrs']
         self._b0: int = json_format["init_progr_len"]
@@ -212,6 +226,7 @@ class SMSgreedy:
         self._deps: List[Tuple[id_T, id_T]] = json_format['dependencies']
         self._max_registers: int = json_format['max_registers_sz']
         self._local_changes: List[Tuple[var_T, var_T]] = json_format['register_changes']
+        self.debug_mode = debug_mode
 
         # We split into two different dicts the initial values and final values in locals
         self._initial_locals: List[var_T] = [local_repr[0] for local_repr in self._local_changes]
@@ -551,14 +566,70 @@ class SMSgreedy:
         # Finally, we just choose an element from locals that covers multiple gaps, which has been determined previously
         return candidate, 'lops'
 
-    def compute_op(self, mops: List[id_T], sops: List[id_T], rops: Set[id_T], cstack: List[var_T],
-                   clocals: List[var_T], clocals_liveness: List[bool]) -> List[id_T]:
-        pass
+    def compute_var(self, var_elem: var_T, cstate: SymbolicState) -> List[id_T]:
+        """
+        Given a stack_var and current state, computes the element and updates cstate accordingly. Returns the sequence of ids.
+        Compute var considers it the var elem is already contained in a local and also updates the locals accordingly
+        """
+        # We assume current var_elem is not stored in a local, as compute_instr determines so
+        instr = self._var2instr[var_elem]
+        seq = self.compute_instr(instr, cstate)
 
-    def choose_subterm_order(self, mops: List[id_T], sops: List[id_T], rops: Set[id_T], cstack: List[var_T],
-                             clocals: List[var_T], clocals_liveness: List[bool]) -> List[id_T]:
-        pass
+        # Finally, we need to decide if the element is stored in a local or not. If so, we apply
+        # a ltee instruction to place it in the corresponding local. We only store an instruction
+        # if it is not cheap and it must be placed in more places
+        if not cheap(instr) and cstate.var_uses[var_elem] < self._var_total_uses[var_elem]:
+            avail_pos_locals = self._available_positions_locals(var_elem, cstate)
 
+            # If there are more than one local in which the element is stored, we just do so
+            if len(avail_pos_locals) > 0:
+                for x in avail_pos_locals:
+                    # We just apply as many tees as possible, so the element is placed in its position
+                    cstate.ltee(x, True)
+                    seq.append(f"LTEE_{x}")
+            else:
+                # Otherwise, we assign a new local
+                x = cstate.available_local()
+                cstate.ltee(x, False)
+                seq.append(f"LTEE_{x}")
+        return seq
+
+    def compute_instr(self, instr: instr_T, cstate: SymbolicState) -> List[id_T]:
+        """
+        Given an instr and the current state, computes the corresponding term. This function is separated from compute_op because there
+        are terms, such as var accesses or memory accesses that produce no var element as a result. Also it does not
+        consider how to update the locals
+        """
+        seq = []
+
+        # First we decide in which order we compute the arguments
+        if instr['comm']:
+            # If it's commutative, study its dependencies.
+            if self.debug_mode:
+                assert len(instr['inpt_sk']) == 2, f'Commutative instruction {instr["id"]} has arity != 2'
+
+            condition = False
+            if condition:
+                input_vars = [instr['inpt_sk'][1], instr['inpt_sk'][0]]
+            else:
+                input_vars = instr['inpt_sk']
+        else:
+            input_vars = instr['inpt_sk']
+
+        for stack_var in input_vars:
+            local = cstate.local_with_value(stack_var)
+            if local != -1:
+                # If it's already stored in a local, we just retrieve it
+                cstate.lget(local)
+                seq.append([f"LGET_{local}"])
+            else:
+                # Otherwise, we must return generate it with a recursive call
+                seq.extend(self.compute_var(stack_var, cstate))
+
+        # Finally, we compute the element
+        cstate.uf(instr)
+        seq.append(instr["id"])
+        return seq
 
     # def solve_permutation(self, cstate: SymbolicState) -> List[id_T]:
     #     """
@@ -596,15 +667,12 @@ class SMSgreedy:
 
     def greedy(self):
         cstate: SymbolicState = SymbolicState(self._initial_stack.copy(), self._initial_locals.copy(),
-                                              self._var_total_uses)
+                                              self._var_total_uses, self.debug_mode)
 
         # We split into three sets: mops (operations with dependencies), sops (elements that appear in fstack
         # that do not appear in mops) and rops (other operations with no restrictions)
         mops_unsorted, sops, lops = self._mops.copy(), self._sops.copy(), self._lops.copy()
-        seq: List[id_T] = []
         mops: List[id_T] = self.select_memory_ops_order(mops_unsorted)
-        maximal_vars: List[id_T] = []
-
         optg: List[id_T] = []
 
         while mops != [] or sops != [] or lops != []:
@@ -623,10 +691,10 @@ class SMSgreedy:
             # of storing in locals, this means that either the stack is empty or the current top of the stack
             # is already placed in the corresponding position. Hence, we just generate the following computation
             else:
-                pass
-                next_computation = self.choose_next_computation(cstate, mops, sops, lops)
-                #ops = self.choose_subterm_order(mops, sops, lops, cstack, clocals, clocals_liveness)
-                #optg.extend(ops)
+                next_id, location = self.choose_next_computation(cstate, mops, sops, lops)
+                remove_computation(next_id, location, mops, sops, lops)
+                ops = self.compute_instr(self._id2instr[next_id], cstate)
+                optg.extend(ops)
 
         # optg.extend(self.solve_permutation(cstate))
 
