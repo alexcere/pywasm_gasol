@@ -8,6 +8,7 @@ from collections import defaultdict, Counter
 import traceback
 from enum import Enum, unique
 import networkx as nx
+from pywasm.symbolic_execution import check_execution_from_ids
 
 # General types we are using
 var_T = str
@@ -260,8 +261,8 @@ class SMSgreedy:
         self._mops, self._sops, self._lops, self._rops = self.split_ids_into_categories()
 
         # We need to compute the sub graph over the full dependency graph, as edges could be lost if we use the
-        # transitive reduction instead
-        self._trans_sub_graph = nx.transitive_reduction(self._dep_graph.subgraph(itertools.chain.from_iterable([self._mops, self._sops, self._lops])))
+        # transitive reduction instead. Hence, we need to compute the transitive_closure of the graph
+        self._trans_sub_graph = nx.transitive_reduction(nx.transitive_closure_dag(self._dep_graph).subgraph(itertools.chain.from_iterable([self._mops, self._sops, self._lops])))
 
         with open('example2.dot', 'w') as f:
             nx.nx_pydot.write_dot(self._trans_sub_graph, f)
@@ -677,7 +678,7 @@ class SMSgreedy:
     #
     #     return optp
 
-    def greedy(self):
+    def greedy(self) -> List[id_T]:
         cstate: SymbolicState = SymbolicState(self._initial_stack.copy(), self._initial_locals.copy(),
                                               self._var_total_uses, self.debug_mode)
 
@@ -729,12 +730,15 @@ class SMSgreedy:
                 self._trans_sub_graph.remove_node(next_id)
 
                 optg.extend(ops)
-        print(cstate)
-        print(optg)
+
         # optg.extend(self.solve_permutation(cstate))
+        return optg
 
 
 if __name__ == "__main__":
     with open(sys.argv[1], 'r') as f:
         sfs = json.load(f)
-    SMSgreedy(sfs, True).greedy()
+    ids = SMSgreedy(sfs, True).greedy()
+
+    if check_execution_from_ids(sfs, ids):
+        print("Check works!!")
