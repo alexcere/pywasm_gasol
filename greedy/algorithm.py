@@ -456,8 +456,8 @@ class SMSgreedy:
 
         # Initial stack elements are not stored in locals and hence, they satisfy that local == -1. Otherwise, it is
         # an element already considered, and we just need to move it if it is not in its position
-        return (local == -1 or len(positions_stack) + len(positions_locals) > 1 or
-                idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) != 0)
+        return (local == -1 and (len(positions_stack) + len(positions_locals) > 1 or
+                idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) != 0))
 
     def can_be_placed_in_position(self, var_elem: var_T, clocals: List[var_T], clocals_liveness: List[bool]) -> bool:
         """
@@ -618,11 +618,11 @@ class SMSgreedy:
 
             condition = False
             if condition:
-                input_vars = [instr['inpt_sk'][1], instr['inpt_sk'][0]]
-            else:
                 input_vars = instr['inpt_sk']
+            else:
+                input_vars = reversed(instr['inpt_sk'])
         else:
-            input_vars = instr['inpt_sk']
+            input_vars = reversed(instr['inpt_sk'])
 
         for stack_var in input_vars:
             local = cstate.local_with_value(stack_var)
