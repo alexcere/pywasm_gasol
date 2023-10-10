@@ -84,9 +84,7 @@ class SymbolicState:
         for var_stack in self.stack:
             var_uses[var_stack] += 1
 
-        # Count vars in the initial locals
-        for var_stack in self.locals:
-            var_uses[var_stack] += 1
+        # Initial locals are not considered to count the stack vars because they are never in their positions
 
         return var_uses
 
@@ -143,7 +141,7 @@ class SymbolicState:
         Get instruction in local x
         """
         stack_var = self.locals[x]
-        self.stack.append(stack_var)
+        self.stack.insert(0, stack_var)
 
         # Var uses: increased in one
         self.var_uses[stack_var] += 1
@@ -461,7 +459,7 @@ class SMSgreedy:
 
         # Initial stack elements are not stored in locals and hence, they satisfy that local == -1. Otherwise, it is
         # an element already considered, and we just need to move it if it is not in its position
-        return (local == -1 and (len(positions_stack) + len(positions_locals) > 1 or
+        return (local == -1 and (len(positions_locals) > 0 or len(positions_stack) > 1 or
                                  (len(positions_stack) == 1 and idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) != 0)))
 
     def can_be_placed_in_position(self, var_elem: var_T, clocals: List[var_T], clocals_liveness: List[bool]) -> bool:
@@ -559,6 +557,7 @@ class SMSgreedy:
             # Call instructions might generate multiple values that we should take into account
             # TODO: maybe resolve ties somehow?
             for out_var in top_instr['outpt_sk']:
+                # TODO consider in locals that can be solved how the operation could liberate some local registers
                 avail_solved_flocals = self._locals_that_can_be_solved(out_var, cstate)
                 pos_flocals = self._var2pos_locals[out_var]
 
@@ -569,7 +568,8 @@ class SMSgreedy:
 
             if all_solved:
                 return id_, 'lops'
-            elif number_solved > max_number_solved:
+            # >= to ensure at least one operation is solved
+            elif number_solved >= max_number_solved:
                 candidate = id_
 
         # After that, we try to assign an element of mops (if there are any)
@@ -634,7 +634,7 @@ class SMSgreedy:
             if local != -1:
                 # If it's already stored in a local, we just retrieve it
                 cstate.lget(local)
-                seq.append([f"LGET_{local}"])
+                seq.append(f"LGET_{local}")
             else:
                 # Otherwise, we must return generate it with a recursive call
                 seq.extend(self.compute_var(stack_var, cstate))
@@ -644,39 +644,39 @@ class SMSgreedy:
         seq.append(instr["id"])
         return seq
 
-    # def solve_permutation(self, cstate: SymbolicState) -> List[id_T]:
-    #     """
-    #     After all terms have been computed, solve_permutation places all elements in their
-    #     corresponding place.
-    #     """
-    #     optp = []
-    #     stack_idx = len(self._final_stack) - len(cstack) - 1
-    #
-    #     # First we solve the values in the stack
-    #     while stack_idx >= 0:
-    #         # The corresponding value must be stored in some local register
-    #         x = select_local_from_value(self._final_stack[stack_idx], clocals)
-    #         cstack.append(clocals[x])
-    #         optp.append(f"local.get[{x}]")
-    #         stack_idx -= 1
-    #
-    #     # Then we detect which locals have a value that appears in flocals and load them onto the stack
-    #     outdated_locals = []
-    #     for local_idx in range(len(self._final_locals)):
-    #         if self._final_locals[local_idx] != clocals[local_idx]:
-    #             x = select_local_from_value(self._final_locals[local_idx], clocals)
-    #             outdated_locals.append(local_idx)
-    #             cstack.append(clocals[x])
-    #             optp.append(f"local.get[{x}]")
-    #
-    #         local_idx += 1
-    #
-    #     # Finally, we store them in the corresponding local in reversed order
-    #     for x in reversed(outdated_locals):
-    #         cstack, clocals = set_local_value(x, cstack, clocals)
-    #         optp.append(f"local.set[{x}]")
-    #
-    #     return optp
+    def solve_permutation(self, cstate: SymbolicState) -> List[id_T]:
+        """
+        After all terms have been computed, solve_permutation places all elements in their
+        corresponding place.
+        """
+        optp = []
+        stack_idx = len(self._final_stack) - len(cstate.stack) - 1
+
+        # First we solve the values in the stack
+        while stack_idx >= 0:
+            # The corresponding value must be stored in some local register
+            x = cstate.local_with_value(self._final_stack[stack_idx])
+            cstate.lget(x)
+            optp.append(f"LGET_{x}")
+            stack_idx -= 1
+
+        # Then we detect which locals have a value that appears in flocals and load them onto the stack
+        outdated_locals = []
+        for local_idx in range(len(self._final_locals)):
+            if self._final_locals[local_idx] != cstate.locals[local_idx]:
+                x = cstate.local_with_value(self._final_locals[local_idx])
+                outdated_locals.append(local_idx)
+                cstate.lget(x)
+                optp.append(f"LGET_{x}")
+
+            local_idx += 1
+
+        # Finally, we store them in the corresponding local in reversed order
+        for x in reversed(outdated_locals):
+            cstate.lset(x, True)
+            optp.append(f"LSET_{x}")
+
+        return optp
 
     def greedy(self) -> List[id_T]:
         cstate: SymbolicState = SymbolicState(self._initial_stack.copy(), self._initial_locals.copy(),
@@ -688,7 +688,8 @@ class SMSgreedy:
         mops: List[id_T] = self.select_memory_ops_order(mops_unsorted)
         optg: List[id_T] = []
 
-        while len(mops) + len(sops) + len(lops) > 0:
+        # For easier code, we end the while when we need to choose an operation and there are no operations left
+        while True:
             var_top = cstate.top_stack()
 
             if self.debug_mode:
@@ -701,7 +702,7 @@ class SMSgreedy:
             # Top of the stack must be removed, as it appears more time it is being used
             if var_top is not None and cstate.var_uses[var_top] > self._var_total_uses[var_top]:
                 cstate.drop()
-                optg.append("drop")
+                optg.append("POP")
 
             # Top of the stack must be placed in some other position
             elif var_top is not None and self.var_must_be_moved(var_top, cstate):
@@ -711,6 +712,10 @@ class SMSgreedy:
             # of storing in locals, this means that either the stack is empty or the current top of the stack
             # is already placed in the corresponding position. Hence, we just generate the following computation
             else:
+                # There are no operations left to choose, so we stop the search
+                if len(mops) + len(sops) + len(lops) == 0:
+                    break
+
                 next_id, location = self.choose_next_computation(cstate, mops, sops, lops)
 
                 if self.debug_mode:
@@ -731,7 +736,13 @@ class SMSgreedy:
 
                 optg.extend(ops)
 
-        # optg.extend(self.solve_permutation(cstate))
+        if self.debug_mode:
+            print("---- State after while ----")
+            print(cstate)
+            print(optg)
+            print("")
+
+        optg.extend(self.solve_permutation(cstate))
         return optg
 
 
