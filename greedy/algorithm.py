@@ -242,7 +242,6 @@ class SMSgreedy:
 
         self._var_total_uses = self._compute_var_total_uses()
         self._dep_graph = self._compute_dependency_graph()
-        self._trans_dep_graph = nx.transitive_closure_dag(self._dep_graph)
         # print(nx.find_cycle(self._dep_graph))
 
         # Nx interesting functions
@@ -299,6 +298,7 @@ class SMSgreedy:
         return var2pos
 
     def _compute_dependency_graph(self) -> nx.DiGraph:
+        # We annotate the edges with direct 0 or 1 to distinguish direct dependencies due to a subterm being embedded
         edge_list = []
         for instr in self._user_instr:
             instr_id = instr['id']
@@ -306,22 +306,21 @@ class SMSgreedy:
             for stack_elem in instr['inpt_sk']:
                 # This means the stack element corresponds to another uninterpreted instruction
                 if stack_elem in self._var2instr:
-                    edge_list.append((self._var2id[stack_elem], instr_id))
+                    edge_list.append((self._var2id[stack_elem], instr_id, {'weight': 1}))
                 # Otherwise, it corresponds to either a local or an initial element in the stack. We just add locals
                 elif 'local' in stack_elem:
-                    edge_list.append((stack_elem, instr_id))
+                    edge_list.append((stack_elem, instr_id, {'weight': 1}))
 
         # We need to consider also the order given by the tuples
         for id1, id2 in self._deps:
-            edge_list.append((id1, id2))
+            edge_list.append((id1, id2, {'weight': 0}))
 
         # Also, the dependencies induced among locals that are live
         for ini_var, final_var in self._local_changes:
             # Either final var corresponds to a computation and appears in var2id or it is another local, which
             # we are referencing using the same name
             final_id = self._var2id.get(final_var, final_var)
-            edge_list.append((ini_var, final_id))
-
+            edge_list.append((ini_var, final_id, {'weight': 0}))
         return nx.DiGraph(edge_list)
 
     def _choose_local_to_store(self, var_elem: var_T, clocals_liveness: List[bool]) -> local_index_T:
@@ -425,7 +424,8 @@ class SMSgreedy:
         and the remaining ones (rops).
         This is useful to choose with computation used.
         """
-        mops = {id_ for dep in self._deps for id_ in dep}
+        # We filter those mops that appear as a subterm of another term
+        mops = {id_ for dep in self._deps for id_ in dep if self._dep_graph.out_degree(id_, 'weight') == 0}
         sops = [self._var2id[stack_var] for stack_var in self._final_stack
                 if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(self._var2instr[stack_var])]
         lops = {self._var2id[stack_var] for stack_var in self._final_locals
@@ -444,7 +444,7 @@ class SMSgreedy:
         """
         # As the dependency relation among instructions is represented as a happens-before, we need to reverse the
         # toposort to start with the deepest elementsh
-        topo_order = nx.topological_sort(self._trans_dep_graph)
+        topo_order = nx.topological_sort(self._trans_sub_graph)
         # We must extract the order that only includes ids from mops
         return [id_ for id_ in topo_order if id_ in mops]
 
