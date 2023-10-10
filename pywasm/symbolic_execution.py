@@ -213,6 +213,32 @@ def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     return final_instr_ids
 
 
+def check_execution_from_ids(sfs: Dict, instr_ids: List[id_T]) -> bool:
+    """
+    Given a SFS and a sequence of ids, checks the ids indeed represent a valid solution
+    """
+    user_instr: List[instr_T] = sfs['user_instrs']
+    local_changes: List[Tuple[var_T, var_T]] = sfs['register_changes']
+    dependencies: List[Tuple[id_T, id_T]] = sfs['dependencies']
+
+    # We split into two different dicts the initial values and final values in locals
+    ilocals: List[var_T] = [local_repr[0] for local_repr in local_changes]
+    cstack, fstack = sfs['src_ws'].copy(), sfs['tgt_ws']
+
+    # Check that the ids returned generate the final state
+    cstack, clocals_list = sfs['src_ws'].copy(), ilocals.copy()
+    flocal_list = [local_repr[1] for local_repr in local_changes]
+
+    for instr_id in instr_ids:
+        execute_instr_id(instr_id, cstack, clocals_list, user_instr)
+
+    assert cstack == fstack, 'Ids - Stack do not match'
+    assert clocals_list == flocal_list, 'Ids - Locals do not match'
+    assert check_deps(instr_ids, dependencies), 'Dependencies are not coherent'
+
+    return True
+
+
 if __name__ == "__main__":
     with open(sys.argv[1], 'r') as f:
         loaded_sfs = json.load(f)
