@@ -264,6 +264,10 @@ class SMSgreedy:
         # transitive reduction instead
         self._trans_sub_graph = nx.transitive_reduction(self._dep_graph.subgraph(itertools.chain.from_iterable([self._mops, self._sops, self._lops])))
 
+        with open('example2.dot', 'w') as f:
+            nx.nx_pydot.write_dot(self._trans_sub_graph, f)
+
+
     def _compute_var_total_uses(self) -> Dict[var_T, int]:
         """
         Computes how many times each var appears either in the final stack, in the final locals or as a subterm
@@ -457,7 +461,7 @@ class SMSgreedy:
         # Initial stack elements are not stored in locals and hence, they satisfy that local == -1. Otherwise, it is
         # an element already considered, and we just need to move it if it is not in its position
         return (local == -1 and (len(positions_stack) + len(positions_locals) > 1 or
-                idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) != 0))
+                                 (len(positions_stack) == 1 and idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) != 0)))
 
     def can_be_placed_in_position(self, var_elem: var_T, clocals: List[var_T], clocals_liveness: List[bool]) -> bool:
         """
@@ -531,7 +535,7 @@ class SMSgreedy:
             top_instr = self._id2instr[top_id]
 
             # If it is cheap to compute or has no dependencies, we can choose it
-            if cheap(top_instr) or self._trans_sub_graph.out_degree(top_id) == 0:
+            if cheap(top_instr) or self._trans_sub_graph.in_degree(top_id) == 0:
                 return top_id, 'sops'
 
         # To determine the best candidate, we annotate which element can solve the most number of locals for the same
@@ -683,10 +687,15 @@ class SMSgreedy:
         mops: List[id_T] = self.select_memory_ops_order(mops_unsorted)
         optg: List[id_T] = []
 
-        while mops != [] or sops != [] or lops != []:
+        while len(mops) + len(sops) + len(lops) > 0:
             var_top = cstate.top_stack()
+
             if self.debug_mode:
+                print("---- While loop ----")
+                print("Ids", optg)
+                print('Ops', mops, sops, lops)
                 print(cstate)
+                print("")
 
             # Top of the stack must be removed, as it appears more time it is being used
             if var_top is not None and cstate.var_uses[var_top] > self._var_total_uses[var_top]:
@@ -702,10 +711,26 @@ class SMSgreedy:
             # is already placed in the corresponding position. Hence, we just generate the following computation
             else:
                 next_id, location = self.choose_next_computation(cstate, mops, sops, lops)
+
+                if self.debug_mode:
+                    print("---- Computation chosen ----")
+                    print(next_id, location)
+                    print(cstate)
+                    print("")
+
                 remove_computation(next_id, location, mops, sops, lops)
                 ops = self.compute_instr(self._id2instr[next_id], cstate)
-                optg.extend(ops)
 
+                # Remove possible computations from mops that have been computed as part of the process
+                while len(mops) > 0 and mops[0] in ops:
+                    remove_computation(mops[0], 'mops', mops, sops, lops)
+                    self._trans_sub_graph.remove_node(mops[0])
+
+                self._trans_sub_graph.remove_node(next_id)
+
+                optg.extend(ops)
+        print(cstate)
+        print(optg)
         # optg.extend(self.solve_permutation(cstate))
 
 
