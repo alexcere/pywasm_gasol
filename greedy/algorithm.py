@@ -52,7 +52,8 @@ def remove_computation(id_: id_T, location: str, mops: List[id_T], sops: List[id
         sops.pop(0)
     elif location == 'lops':
         lops.remove(id_)
-    raise ValueError(f"Location {location} in _remove_computation is not valid")
+    else:
+        raise ValueError(f"Location {location} in _remove_computation is not valid")
 
 
 @unique
@@ -170,7 +171,7 @@ class SymbolicState:
 
         # Debug mode to check the pop args from the stack match
         if self.debug_mode:
-            if instr['comm']:
+            if instr['commutative']:
                 # Compare them as multisets
                 assert Counter(consumed_elements) == Counter(instr['inpt_sk']), \
                     f"{instr['id']} is not consuming the correct elements from the stack"
@@ -475,6 +476,13 @@ class SMSgreedy:
         positions_available_locals = self._available_positions_locals(var_elem, cstate)
         positions_available_stack = self._available_positions_stack(var_elem, cstate)
 
+        if self.debug_mode:
+            print('---- Move top to position ----')
+            print(cstate)
+            print("Positions locals:", positions_available_locals)
+            print("Positions stack:", positions_available_stack)
+            print("")
+
         if len(positions_available_locals) == 0:
             # No position is available yet, so we just store it one available local
             y = cstate.available_local()
@@ -603,7 +611,7 @@ class SMSgreedy:
         seq = []
 
         # First we decide in which order we compute the arguments
-        if instr['comm']:
+        if instr['commutative']:
             # If it's commutative, study its dependencies.
             if self.debug_mode:
                 assert len(instr['inpt_sk']) == 2, f'Commutative instruction {instr["id"]} has arity != 2'
@@ -677,6 +685,8 @@ class SMSgreedy:
 
         while mops != [] or sops != [] or lops != []:
             var_top = cstate.top_stack()
+            if self.debug_mode:
+                print(cstate)
 
             # Top of the stack must be removed, as it appears more time it is being used
             if var_top is not None and cstate.var_uses[var_top] > self._var_total_uses[var_top]:
@@ -702,4 +712,4 @@ class SMSgreedy:
 if __name__ == "__main__":
     with open(sys.argv[1], 'r') as f:
         sfs = json.load(f)
-    SMSgreedy(sfs).greedy()
+    SMSgreedy(sfs, True).greedy()
