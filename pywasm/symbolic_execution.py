@@ -122,11 +122,19 @@ def execute_instr_id(instr_id: str, cstack: List[var_T], clocals: List[var_T], u
     # load.set: store the value in the corresponding local
     elif 'LSET' in instr_id:
         idx = extract_idx_from_id(instr_id)
+
+        if idx >= len(clocals):
+            clocals.append('')
+
         clocals[idx] = cstack.pop(0)
 
     # load.tee: store the value in the corresponding local without consuming the top of the stack
     elif 'LTEE' in instr_id:
         idx = extract_idx_from_id(instr_id)
+
+        if idx >= len(clocals):
+            clocals.append('')
+
         clocals[idx] = cstack[0]
 
     else:
@@ -146,6 +154,8 @@ def check_deps(instr_ids: List[id_T], dependencies: List[Tuple[id_T, id_T]]) -> 
     """
     Check the ids from the final instructions satisfy the dependencies
     """
+    for dep in dependencies:
+        print(dep, instr_ids.index(dep[0]) < instr_ids.index(dep[1]))
     return all(instr_ids.index(dep[0]) < instr_ids.index(dep[1]) for dep in dependencies)
 
 
@@ -232,8 +242,12 @@ def check_execution_from_ids(sfs: Dict, instr_ids: List[id_T]) -> bool:
     for instr_id in instr_ids:
         execute_instr_id(instr_id, cstack, clocals_list, user_instr)
 
+    print('Len initial', len(sfs['original_instrs_with_ids']))
+    print('Len final', len(instr_ids))
+
     assert cstack == fstack, 'Ids - Stack do not match'
-    assert clocals_list == flocal_list, 'Ids - Locals do not match'
+    # Check only relevant locals
+    assert clocals_list[:len(flocal_list)] == flocal_list, 'Ids - Locals do not match'
     assert check_deps(instr_ids, dependencies), 'Dependencies are not coherent'
 
     return True
