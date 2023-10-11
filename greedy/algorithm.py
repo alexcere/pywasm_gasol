@@ -241,6 +241,8 @@ class SMSgreedy:
 
         self._var_total_uses = self._compute_var_total_uses()
         self._dep_graph = self._compute_dependency_graph()
+        self._instr_dep_graph = self._dep_graph.edge_subgraph((u,v) for u,v, info in self._dep_graph.edges(data=True)
+                                                              if info['weight'] > 0)
         # print(nx.find_cycle(self._dep_graph))
 
         # Nx interesting functions
@@ -379,6 +381,31 @@ class SMSgreedy:
             local_to_retrieve = cstate.local_with_value(self._final_stack[idx])
         return ops
 
+    def _isolated_instr(self, instr_id: id_T) -> bool:
+        """
+        Given an instruction that has some deps and can appear embedded in a term (probably, a load or get instruction),
+        checks it must be considered as a separate instruction to deal with.
+        """
+        # Access the successors it can be computed with
+        other_successors = set(self._dep_graph.successors(instr_id))
+        instr_successors = set(nx.nodes(nx.dfs_tree(self._instr_dep_graph, instr_id)))
+        # We need to remove the same vertex
+        instr_successors.remove(instr_id)
+        other_successors.difference_update(instr_successors)
+
+        if self.debug_mode:
+            print("---- Detect isolated instr ----")
+            for node_emb in instr_successors:
+                if 'call' in node_emb or 'store' in node_emb:
+                    for node_not in other_successors:
+                        print(node_not, node_emb, nx.has_path(self._dep_graph, node_not, node_emb))
+
+        # Condition: all maximal elements have some dependencies with another instruction
+        # which does not use the term directly
+        # TODO: improve condition
+        return all(any(nx.has_path(self._dep_graph, node_not, node_emb) for node_not in other_successors)
+                   for node_emb in instr_successors if 'call' in node_emb or 'store' in node_emb)
+
     def _available_positions_stack(self, var_elem: var_T, cstate: SymbolicState) -> List[int]:
         """
         Returns the set of positions w.r.t stack. in which we need to store the var elem and are currently available
@@ -415,7 +442,6 @@ class SMSgreedy:
         positions_locals = self._var2pos_locals[var_elem]
         return [x for x in positions_locals if cstate.locals[x] == var_elem or not cstate.liveness[x]]
 
-
     def split_ids_into_categories(self) -> Tuple[Set[id_T], List[id_T], Set[id_T], Set[id_T]]:
         """
         Returns four sets of instruction ids: the ones that have some kind of dependency (mops), the ones that appear in
@@ -424,7 +450,9 @@ class SMSgreedy:
         This is useful to choose with computation used.
         """
         # We filter those mops that appear as a subterm of another term
-        mops = {id_ for dep in self._deps for id_ in dep if self._dep_graph.out_degree(id_, 'weight') == 0}
+        # TODO: Not consider load or get instructions if they can be computed when computing a superterm
+        mops = {id_ for dep in self._deps for id_ in dep if self._dep_graph.out_degree(id_, 'weight') == 0
+                or self._isolated_instr(id_)}
         sops = [self._var2id[stack_var] for stack_var in self._final_stack
                 if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(self._var2instr[stack_var])]
         lops = {self._var2id[stack_var] for stack_var in self._final_locals
@@ -433,9 +461,6 @@ class SMSgreedy:
         rops = set(self._id2instr.keys()).difference(mops.union(sops).union(lops))
         return mops, sops, lops, rops
 
-    def permutation(self) -> bool:
-        pass
-    
     def select_memory_ops_order(self, mops: Set[id_T]) -> List[id_T]:
         """
         Returns a compatible order w.r.t mops, considering the different dependencies that are formed both from
@@ -453,14 +478,13 @@ class SMSgreedy:
         corresponds to current top of the stack
         """
         positions_stack = self._var2pos_stack[var_elem]
-        positions_locals = self._var2pos_locals[var_elem]
 
         local = cstate.local_with_value(var_elem)
 
         # Initial stack elements are not stored in locals and hence, they satisfy that local == -1. Otherwise, it is
         # an element already considered, and we just need to move it if it is not in its position
-        return (local == -1 and (len(positions_locals) > 0 or len(positions_stack) > 1 or
-                                 (len(positions_stack) == 1 and idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) != 0)))
+        return (local == -1 and not (self._var_total_uses[var_elem] == cstate.var_uses[var_elem] and len(positions_stack) == 1 and
+                                     idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) == 0))
 
     def can_be_placed_in_position(self, var_elem: var_T, clocals: List[var_T], clocals_liveness: List[bool]) -> bool:
         """
@@ -688,6 +712,14 @@ class SMSgreedy:
         mops: List[id_T] = self.select_memory_ops_order(mops_unsorted)
         optg: List[id_T] = []
 
+        if self.debug_mode:
+            print("---- Initial Ops ----")
+            print('Mops:', mops)
+            print('Lops:', lops)
+            print('Sops:', sops)
+            print("")
+
+
         # For easier code, we end the while when we need to choose an operation and there are no operations left
         while True:
             var_top = cstate.top_stack()
@@ -701,6 +733,13 @@ class SMSgreedy:
 
             # Top of the stack must be removed, as it appears more time it is being used
             if var_top is not None and cstate.var_uses[var_top] > self._var_total_uses[var_top]:
+
+                if self.debug_mode:
+                    print("---- Drop term ----")
+                    print("Var Term", var_top)
+                    print(cstate)
+                    print("")
+
                 cstate.drop()
                 optg.append("POP")
 
@@ -736,13 +775,14 @@ class SMSgreedy:
 
                 optg.extend(ops)
 
+        optg.extend(self.solve_permutation(cstate))
+
         if self.debug_mode:
-            print("---- State after while ----")
+            print("---- State after solving permutation ----")
             print(cstate)
             print(optg)
             print("")
 
-        optg.extend(self.solve_permutation(cstate))
         return optg
 
 
