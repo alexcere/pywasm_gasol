@@ -1,6 +1,7 @@
 """
 Module to generate random sequences of instructions and test the greedy algorithm
 """
+import json
 import sys
 from typing import List
 import random
@@ -9,6 +10,8 @@ import greedy
 
 instruction = pywasm.instruction
 binary = pywasm.binary
+algorithm = greedy.algorithm
+symbolic = pywasm.symbolic_execution
 
 # We only consider i32 ops
 choices = [byte for byte, instr in instruction.opcode_info.items() if instr['type'] != instruction.InstructionType.control
@@ -94,7 +97,19 @@ def random_block(n: int) -> List[str]:
     return [random_opcode() for _ in range(n)]
 
 
+def execute_symbolic_execution_and_greedy(instrs: List[str]) -> None:
+    pywasm.symbolic_exec_from_instrs(plain_instrs)
+
+    with open(pywasm.global_params.FINAL_FOLDER.joinpath('isolated.json'), 'r') as f:
+        sfs = json.load(f)
+
+    ids = algorithm.SMSgreedy(sfs, False).greedy()
+    print(ids)
+    if symbolic.check_execution_from_ids(sfs, ids):
+        print("Check works!!")
+
+
 if __name__ == "__main__":
     n = int(sys.argv[1])
     plain_instrs = random_block(n)
-    pywasm.symbolic_exec_from_instrs(plain_instrs)
+    execute_symbolic_execution_and_greedy(plain_instrs)
