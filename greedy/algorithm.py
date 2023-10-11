@@ -69,7 +69,8 @@ class SymbolicState:
     instruction. With this dict, we can determine the liveness analysis
     """
 
-    def __init__(self, stack: List[var_T], locals_: List[var_T], total_uses: Dict[id_T, int], debug_mode: bool = True) -> None:
+    def __init__(self, stack: List[var_T], locals_: List[var_T], total_uses: Dict[id_T, int],
+                 debug_mode: bool = True) -> None:
         self.stack: List[var_T] = stack
         self.locals: List[var_T] = locals_
         self.total_uses: Dict[id_T, int] = total_uses
@@ -210,7 +211,8 @@ class SymbolicState:
         return len(self.locals) - 1
 
     def __repr__(self):
-        sentences = [f"Current stack: {self.stack}", "Current locals:", *(f"{local}: {liveness}" for local, liveness in zip(self.locals, self.liveness))]
+        sentences = [f"Current stack: {self.stack}", "Current locals:",
+                     *(f"{local}: {liveness}" for local, liveness in zip(self.locals, self.liveness))]
         return '\n'.join(sentences)
 
 
@@ -241,7 +243,7 @@ class SMSgreedy:
 
         self._var_total_uses = self._compute_var_total_uses()
         self._dep_graph = self._compute_dependency_graph()
-        self._instr_dep_graph = self._dep_graph.edge_subgraph((u,v) for u,v, info in self._dep_graph.edges(data=True)
+        self._instr_dep_graph = self._dep_graph.edge_subgraph((u, v) for u, v, info in self._dep_graph.edges(data=True)
                                                               if info['weight'] > 0)
         # print(nx.find_cycle(self._dep_graph))
 
@@ -262,11 +264,11 @@ class SMSgreedy:
 
         # We need to compute the sub graph over the full dependency graph, as edges could be lost if we use the
         # transitive reduction instead. Hence, we need to compute the transitive_closure of the graph
-        self._trans_sub_graph = nx.transitive_reduction(nx.transitive_closure_dag(self._dep_graph).subgraph(itertools.chain.from_iterable([self._mops, self._sops, self._lops])))
+        self._trans_sub_graph = nx.transitive_reduction(nx.transitive_closure_dag(self._dep_graph).subgraph(
+            itertools.chain.from_iterable([self._mops, self._sops, self._lops])))
 
         with open('example2.dot', 'w') as f:
             nx.nx_pydot.write_dot(self._trans_sub_graph, f)
-
 
     def _compute_var_total_uses(self) -> Dict[var_T, int]:
         """
@@ -454,9 +456,11 @@ class SMSgreedy:
         mops = {id_ for dep in self._deps for id_ in dep if self._dep_graph.out_degree(id_, 'weight') == 0
                 or self._isolated_instr(id_)}
         sops = [self._var2id[stack_var] for stack_var in self._final_stack
-                if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(self._var2instr[stack_var])]
+                if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(
+                self._var2instr[stack_var])]
         lops = {self._var2id[stack_var] for stack_var in self._final_locals
-                if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(self._var2instr[stack_var])
+                if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(
+                self._var2instr[stack_var])
                 and self._var_total_uses[stack_var] == 1}
         rops = set(self._id2instr.keys()).difference(mops.union(sops).union(lops))
         return mops, sops, lops, rops
@@ -480,11 +484,13 @@ class SMSgreedy:
         positions_stack = self._var2pos_stack[var_elem]
 
         local = cstate.local_with_value(var_elem)
+        instr = self._var2instr.get(var_elem, None)
 
-        # Initial stack elements are not stored in locals and hence, they satisfy that local == -1. Otherwise, it is
-        # an element already considered, and we just need to move it if it is not in its position
-        return (local == -1 and not (self._var_total_uses[var_elem] == cstate.var_uses[var_elem] and len(positions_stack) == 1 and
-                                     idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) == 0))
+        # We don't need to move a var if it's already in locals and hence, they must satisfy that local == -1.
+        # Also, if the var corresponds to a cheap instruction or all occurrences of that var have been already computed
+        # and it must be at current position
+        return local == -1 and not (self._var_total_uses[var_elem] == cstate.var_uses[var_elem] and len(positions_stack) >= 1 and
+                                     idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) == 0) and not (instr is not None and cheap(instr))
 
     def can_be_placed_in_position(self, var_elem: var_T, clocals: List[var_T], clocals_liveness: List[bool]) -> bool:
         """
@@ -532,7 +538,8 @@ class SMSgreedy:
 
             # Finally, we check whether the last store to local can be a ltee (if there is an element left to place in
             # the stack at the same position) or a lset
-            if len(positions_available_stack) == 1 and idx_wrt_cstack(positions_available_stack[0], cstate.stack, self._final_stack) == 0:
+            if len(positions_available_stack) == 1 and idx_wrt_cstack(positions_available_stack[0], cstate.stack,
+                                                                      self._final_stack) == 0:
                 local = positions_available_locals[i]
                 cstate.ltee(local, True)
                 ops.append(f"LTEE_{local}")
@@ -553,12 +560,27 @@ class SMSgreedy:
         """
 
         # First we try to assign the next element which is top of the stack
-        if len(sops) > 0:
-            top_id = sops[0]
-            top_instr = self._id2instr[top_id]
+        top_idx = idx_wrt_fstack(0, cstate.stack, self._final_stack) - 1
+        if 0 <= top_idx < len(self._final_stack):
+            top_var = self._final_stack[top_idx]
+            top_id = self._var2id.get(top_var, None)
+
+            # It corresponds to an initial value that should have been stored in a local
+            if top_id is None:
+                x = cstate.local_with_value(top_var)
+
+                if x == -1:
+                    raise ValueError("Initial value from choose_next_computation is not stored in a local")
+
+                return top_var, 'local'
+
+            instr = self._var2instr[top_var]
+            # Cheap instruction can be computed directly
+            if cheap(instr):
+                return top_id, 'cheap'
 
             # If it is cheap to compute or has no dependencies, we can choose it
-            if cheap(top_instr) or self._trans_sub_graph.in_degree(top_id) == 0:
+            elif self._trans_sub_graph.in_degree(top_id) == 0:
                 return top_id, 'sops'
 
         # To determine the best candidate, we annotate which element can solve the most number of locals for the same
@@ -680,6 +702,10 @@ class SMSgreedy:
         while stack_idx >= 0:
             # The corresponding value must be stored in some local register
             x = cstate.local_with_value(self._final_stack[stack_idx])
+
+            if x == -1:
+                raise ValueError("Stack var in solve_permutation is not stored in a local")
+
             cstate.lget(x)
             optp.append(f"LGET_{x}")
             stack_idx -= 1
@@ -718,7 +744,6 @@ class SMSgreedy:
             print('Lops:', lops)
             print('Sops:', sops)
             print("")
-
 
         # For easier code, we end the while when we need to choose an operation and there are no operations left
         while True:
@@ -763,15 +788,25 @@ class SMSgreedy:
                     print(cstate)
                     print("")
 
-                remove_computation(next_id, location, mops, sops, lops)
-                ops = self.compute_instr(self._id2instr[next_id], cstate)
+                # It is already stored in a local
+                if location == 'local':
+                    # We just load the stack var
+                    x = cstate.local_with_value(next_id)
+                    cstate.lget(x)
+                    ops = [f'LGET_{x}']
+                elif location == 'cheap':
+                    # Cheap instructions are just computed, there is no need to erase elements from the lists
+                    ops = self.compute_instr(self._id2instr[next_id], cstate)
+                else:
+                    remove_computation(next_id, location, mops, sops, lops)
+                    ops = self.compute_instr(self._id2instr[next_id], cstate)
 
-                # Remove possible computations from mops that have been computed as part of the process
-                while len(mops) > 0 and mops[0] in ops:
-                    remove_computation(mops[0], 'mops', mops, sops, lops)
-                    self._trans_sub_graph.remove_node(mops[0])
+                    # Remove possible computations from mops that have been computed as part of the process
+                    while len(mops) > 0 and mops[0] in ops:
+                        remove_computation(mops[0], 'mops', mops, sops, lops)
+                        self._trans_sub_graph.remove_node(mops[0])
 
-                self._trans_sub_graph.remove_node(next_id)
+                    self._trans_sub_graph.remove_node(next_id)
 
                 optg.extend(ops)
 
@@ -789,7 +824,7 @@ class SMSgreedy:
 if __name__ == "__main__":
     with open(sys.argv[1], 'r') as f:
         sfs = json.load(f)
-    ids = SMSgreedy(sfs, True).greedy()
+    ids = SMSgreedy(sfs, False).greedy()
 
     if check_execution_from_ids(sfs, ids):
         print("Check works!!")
