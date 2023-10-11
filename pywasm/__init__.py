@@ -121,20 +121,24 @@ def load(name: str, imps: typing.Dict = None, opts: typing.Optional[option.Optio
         return Runtime(module, imps, opts)
 
 
+def symbolic_exec_from_instrs(plain_instrs: typing.List[str]):
+    function_addresses = []
+    instrs = [binary.Instruction.from_plain_repr(plain_instr, function_addresses) for plain_instr in plain_instrs]
+
+    # We retrieve the maximum index accessed from the locals and globals
+    local_args = [instr.args[0] for instr in instrs if 'local' in instr.name]
+    n_locals = max(local_args) + 1 if len(local_args) > 0 else 0
+
+    global_args = [instr.args[0] for instr in instrs if 'global' in instr.name]
+    n_globals = max(global_args) + 1 if len(global_args) > 0 else 0
+    execution.symbolic_execution_from_instrs(instrs, function_addresses, n_locals, n_globals)
+
+
 def symbolic_exec_from_block(file_name: str):
     # Generate a runtime directly by loading a file from disk.
     with open(file_name, 'r') as f:
         plain_instrs = f.read().split()
-        function_addresses = []
-        instrs = [binary.Instruction.from_plain_repr(plain_instr, function_addresses) for plain_instr in plain_instrs]
-
-        # We retrieve the maximum index accessed from the locals and globals
-        local_args = [instr.args[0] for instr in instrs if 'local' in instr.name]
-        n_locals = max(local_args) + 1 if len(local_args) > 0 else 0
-
-        global_args = [instr.args[0] for instr in instrs if 'global' in instr.name]
-        n_globals = max(global_args) + 1 if len(global_args) > 0 else 0
-        execution.symbolic_execution_from_instrs(instrs, function_addresses, n_locals, n_globals)
+        symbolic_exec_from_instrs(plain_instrs)
 
 
 Store = execution.Store
