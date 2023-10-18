@@ -24,6 +24,7 @@ def parse_args() -> Namespace:
 def initialize(arguments: Namespace) -> None:
     if arguments.final_folder is not None:
         pywasm.global_params.FINAL_FOLDER = Path(arguments.final_folder)
+        Path.mkdir(pywasm.global_params.FINAL_FOLDER, exist_ok=True, parents=True)
     pywasm.global_params.DEBUG_MODE = arguments.debug_mode
 
 
