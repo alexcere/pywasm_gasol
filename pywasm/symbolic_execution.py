@@ -140,10 +140,19 @@ def execute_instr_id(instr_id: str, cstack: List[var_T], clocals: List[var_T], u
     else:
         instr = [instr for instr in user_instr if instr['id'] == instr_id][0]
 
-        # We consume the elements
-        for input_var in instr['inpt_sk']:
-            assert cstack[0] == input_var
-            cstack.pop(0)
+        if instr["commutative"]:
+            input_vars = instr['inpt_sk']
+            assert len(input_vars) == 2, 'Commutative instructions with #args != 2'
+            # We consume the elements
+            s0, s1= cstack.pop(0), cstack.pop(0)
+            assert (s0 == input_vars[0] and s1 == input_vars[1]) or (s0 == input_vars[1] and s1 == input_vars[0]), \
+                f"Args don't match in commutative instr {instr_id}"
+
+        else:
+            # We consume the elements
+            for input_var in instr['inpt_sk']:
+                assert cstack[0] == input_var, f"Args don't match in non-commutative instr {instr_id}"
+                cstack.pop(0)
 
         # We introduce the new elements
         for output_var in instr['outpt_sk']:

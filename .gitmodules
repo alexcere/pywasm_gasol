@@ -1,0 +1,3 @@
+[submodule "evmopt"]
+	path = evmopt
+	url = git@github.com:pstuckey/evmopt.git
