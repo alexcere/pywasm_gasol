@@ -34,7 +34,7 @@ def dot_for_term(term: str, user_instr: typing.List[typing.Dict], term_to_id: ty
 
         # If the instruction is not commutative, add a edge to represent the fixed order among elements
         if not current_instr["commutative"]:
-            add_consecutive_term(children, term_to_id, "not_comm", f)
+            add_consecutive_term(list(reversed(children)), term_to_id, "bef", f)
 
 
 # Given the blocks corresponding to the CFG of a program, and the string containing the input program,
@@ -45,11 +45,10 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name):
         final_stack = sfs_json["tgt_ws"]
         initial_stack = sfs_json["src_ws"]
         user_instrs = sfs_json["user_instrs"]
-        local_changes = sfs_json["local_changes"]
+        local_changes = sfs_json["register_changes"]
         mem_deps = sfs_json["dependencies"]
-        # local_deps = sfs_json["local_dependences"]
 
-        stack_var_to_id = {instr['outpt_sk'][0]: instr['id'] for instr in user_instrs if len(instr['outpt_sk']) == 1 and 'tee' not in instr['id']}
+        stack_var_to_id = {instr['outpt_sk'][0]: instr['id'] for instr in user_instrs if len(instr['outpt_sk']) == 1}
         term_to_id = {}
         for term in initial_stack:
             dot_for_term(term, user_instrs, term_to_id, stack_var_to_id, f)
@@ -59,17 +58,18 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name):
             dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
             add_edge("tg_stk", stack_var_to_id[term], term_to_id, "in", f)
 
-        store_instrs = [instr for instr in user_instrs if instr['storage']]
+        store_instrs = [instr for instr in user_instrs if len(instr['outpt_sk']) == 0 or 'call' in instr['id']]
         for store_instr in store_instrs:
             dot_for_term(store_instr['id'], user_instrs, term_to_id, stack_var_to_id, f)
 
         for local, term in local_changes:
             if local not in term_to_id:
                 dot_for_term(local, user_instrs, term_to_id, stack_var_to_id, f)
-            if stack_var_to_id[term] not in term_to_id:
+            final_id = stack_var_to_id.get(term, None)
+            if final_id is not None and final_id not in term_to_id:
                 dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
-            add_edge(local, stack_var_to_id[term], term_to_id, "in", f)
-            dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
+            add_edge(local, stack_var_to_id.get(term, term), term_to_id, "in", f)
+            dot_for_term(stack_var_to_id.get(term, term), user_instrs, term_to_id, stack_var_to_id, f)
 
         for acc1, acc2 in mem_deps:
             add_edge(acc2, acc1, term_to_id, "dep", f)
