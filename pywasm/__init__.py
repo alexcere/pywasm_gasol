@@ -1,4 +1,5 @@
 import typing
+import pandas as pd
 
 from . import binary
 from . import convention
@@ -93,7 +94,7 @@ class Runtime:
         for i, e in enumerate(func.type.args.data):
             v = execution.Value.new(convention.symbolic, f"in_{i}")
             func_args.append(v)
-        self.machine.invocate_symbolic(func, func_args, func_address)
+        return self.machine.invocate_symbolic(func, func_args, func_address)
 
     def symbolic_exec(self, name: str):
         func_addr = self.func_addr(name)
@@ -101,10 +102,13 @@ class Runtime:
         self.symbolic_exec_func(func, func_addr)
 
     def all_symbolic_exec(self):
+        csv_rows = []
         for func_addr, func in enumerate(self.machine.store.function_list):
             print(f"{func_addr} {func.type}")
             if isinstance(func, execution.WasmFunc):
-                self.symbolic_exec_func(func, func_addr)
+                csv_rows.extend(self.symbolic_exec_func(func, func_addr))
+        # Finally, we store the results in a csv file
+        pd.DataFrame(csv_rows).to_csv(global_params.CSV_FILE)
 
 
 # Using the pywasm API.

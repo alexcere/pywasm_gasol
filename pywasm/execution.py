@@ -4,6 +4,7 @@ import json
 import typing
 
 import numpy
+import pandas as pd
 import networkx as nx
 
 from . import binary
@@ -16,6 +17,7 @@ from . import global_params
 from . import dataflow_dot
 from . import dependencies
 from . import symbolic_execution
+from . import superoptimizer
 
 import sys
 # ======================================================================================================================
@@ -782,8 +784,7 @@ class AbstractConfiguration:
                 arity=len(function.type.rets.data),
             )
             self.set_frame(frame)
-            self.exec_symbolic(function, function_args, func_address)
-            return
+            return self.exec_symbolic(function, function_args, func_address)
         if isinstance(function, HostFunc):
             raise Exception(f'pywasm_gasol: host function not allowed to be executed')
         raise Exception(f'pywasm: unknown function type: {function}')
@@ -791,6 +792,7 @@ class AbstractConfiguration:
     def exec_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value], func_address: int):
 
         blocks = binary.Expression.blocks_from_instructions(self.frame.expr.data)
+        csv_rows = []
         for i, block in enumerate(blocks):
             # Group function args and local list as a single list of "local_{i}" symbolic values
             local_list = [Value.new(convention.symbolic, f"local_{i}") for i in range(len(function_args) + len(function.code.local_list))]
@@ -802,7 +804,10 @@ class AbstractConfiguration:
             )
             self.set_frame(frame)
             print(f"Analyzing block {i}")
-            self.exec_symbolic_block(block, f"function_{func_address}_block_{i}")
+            csv_row = self.exec_symbolic_block(block, f"function_{func_address}_block_{i}")
+            if csv_row is not None:
+                csv_rows.append(csv_row)
+        return csv_rows
 
     def print_block(self, stack, memory_accesses, var_accesses, call_accesses):
         print(f"Stack:")
@@ -824,7 +829,7 @@ class AbstractConfiguration:
         print('\n'.join([f'({idx}, {str(local_instance)})' for idx, local_instance in enumerate(self.frame.local_list)]))
         print("")
 
-    def exec_symbolic_block(self, block: typing.List[binary.Instruction], block_name: str):
+    def exec_symbolic_block(self, block: typing.List[binary.Instruction], block_name: str) -> typing.Optional[typing.Dict]:
         # Remove labels
         basic_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                        instr.opcode not in instruction.end_basic_block_instrs]
@@ -869,11 +874,16 @@ class AbstractConfiguration:
             json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"],
                                                                                             json_sat["dependencies"])
             json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
+            json_sat['block'] = block_name
             store_json(json_sat, block_name)
-
+            final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(json_sat, 100, None)
+            csv_info = superoptimizer.generate_statistics_info([str(instr) for instr in basic_block], final_block, outcome,
+                                                               solver_time, 10, len(block), len(block), block_name)
             if global_params.DEBUG_MODE:
+                dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
                 assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
             # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
+            return csv_info
 
 
 def process_accesses(var_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]) -> typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]:
@@ -3043,5 +3053,6 @@ def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
     )
     config.set_frame(frame)
 
-    # Execute the block symbolically with the instructions
-    config.exec_symbolic_block(instrs, 'isolated')
+    # Execute the block symbolically with the instructions and store the results in a csv file
+    final_row = config.exec_symbolic_block(instrs, 'isolated')
+    pd.DataFrame([final_row]).to_csv(global_params.CSV_FILE)

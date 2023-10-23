@@ -1,8 +1,10 @@
 import sys
+import os
 from pathlib import Path
 from argparse import ArgumentParser, Namespace
 import pywasm
 # pywasm.on_debug()
+sys.path.append(os.path.dirname(os.path.realpath(__file__))+"/evmopt/evmx")
 
 
 def parse_args() -> Namespace:
@@ -18,13 +20,23 @@ def parse_args() -> Namespace:
                                 dest="final_folder", action='store')
     output_options.add_argument('-d', '--debug', help='Debug mode enabled. Prints extra information',
                                 action='store_true', dest='debug_mode')
+    output_options.add_argument('-c', '--csv', help="Folder to store blocks' specification",
+                                dest="csv_file", action='store')
+
     return ap.parse_args()
 
 
 def initialize(arguments: Namespace) -> None:
+
     if arguments.final_folder is not None:
         pywasm.global_params.FINAL_FOLDER = Path(arguments.final_folder)
         Path.mkdir(pywasm.global_params.FINAL_FOLDER, exist_ok=True, parents=True)
+
+    if arguments.csv_file is not None:
+        pywasm.global_params.CSV_FILE = arguments.csv_file
+    else:
+        pywasm.global_params.CSV_FILE = pywasm.global_params.FINAL_FOLDER.joinpath('statistics.csv')
+
     pywasm.global_params.DEBUG_MODE = arguments.debug_mode
 
 
