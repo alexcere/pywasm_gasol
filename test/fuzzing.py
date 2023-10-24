@@ -14,9 +14,10 @@ algorithm = greedy.algorithm
 symbolic = pywasm.symbolic_execution
 
 # We only consider i32 ops
-choices = [byte for byte, instr in instruction.opcode_info.items() if instr['type'] != instruction.InstructionType.control
-           and all(t not in instr["name"] for t in ['i64', 'f32', 'f64'])]
+# choices = [byte for byte, instr in instruction.opcode_info.items() if instr['type'] != instruction.InstructionType.control
+#            and all(t not in instr["name"] for t in ['i64', 'f32', 'f64'])]
 
+choices = [byte for byte, instr in instruction.opcode_info.items() if "local" in instr["name"] or "call" == instr["name"]]
 
 def random_opcode() -> str:
     """
@@ -98,7 +99,7 @@ def random_block(n: int) -> List[str]:
 
 
 def execute_symbolic_execution_and_greedy(instrs: List[str]) -> None:
-    pywasm.symbolic_exec_from_instrs(plain_instrs)
+    pywasm.symbolic_exec_from_instrs(instrs)
 
     with open(pywasm.global_params.FINAL_FOLDER.joinpath('isolated.json'), 'r') as f:
         sfs = json.load(f)
@@ -109,7 +110,14 @@ def execute_symbolic_execution_and_greedy(instrs: List[str]) -> None:
         print("Check works!!")
 
 
+def execute_symbolic_execution_and_encoder(instrs: List[str]) -> None:
+    pywasm.symbolic_exec_from_instrs(instrs)
+
+
 if __name__ == "__main__":
     n = int(sys.argv[1])
     plain_instrs = random_block(n)
-    execute_symbolic_execution_and_greedy(plain_instrs)
+    pywasm.global_params.DEBUG_MODE = True # Enable debug mode
+    pywasm.global_params.ALL_EXECUTED = True # Allow executing any block
+    print(' '.join(plain_instrs))
+    execute_symbolic_execution_and_encoder(plain_instrs)
