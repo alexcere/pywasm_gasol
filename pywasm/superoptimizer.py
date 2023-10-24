@@ -59,8 +59,8 @@ def evmx_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], s
     if global_params.DEBUG_MODE:
         if 'optimal' in optimization_outcome:
             print("Checking...")
-            print(symbolic_execution.check_execution_from_ids(sfs, id_seq))
-    return ([id2disasm(instr_id, instr_id_to_instr, ini_locals) for instr_id in id_seq if id_seq != "NOP"],
+            print(symbolic_execution.check_execution_from_ids(sfs, [instr_id for instr_id in id_seq if instr_id != "NOP"]))
+    return ([id2disasm(instr_id, instr_id_to_instr, ini_locals) for instr_id in id_seq if instr_id != "NOP"],
             optimization_outcome, time)
 
 
