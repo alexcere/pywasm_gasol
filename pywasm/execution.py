@@ -1,6 +1,7 @@
 import collections
 import copy
 import json
+import traceback
 import typing
 
 import numpy
@@ -855,7 +856,7 @@ class AbstractConfiguration:
         filtered_accesses = process_accesses(var_accesses)
         # filtered_memory_accesses = process_memory_accesses(memory_accesses)
         global_accesses = [var_access for var_access in filtered_accesses if "global" in var_access[1].instr.name]
-        if interesting_block(var_accesses):
+        if global_params.ALL_EXECUTED or interesting_block(var_accesses):
             if global_params.DEBUG_MODE:
                 print("")
                 print("Instructions:")
@@ -877,16 +878,16 @@ class AbstractConfiguration:
             # and then another value is stored in the same local
             try:
                 json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
-            except:
-                pass
-
+            except Exception:
+                print("GOTCHA")
+                traceback.print_exc()
             json_sat['block'] = block_name
             store_json(json_sat, block_name)
             final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(json_sat, 100, None)
             csv_info = superoptimizer.generate_statistics_info([str(instr) for instr in basic_block], final_block, outcome,
                                                                solver_time, 10, len(block), len(block), block_name)
             if global_params.DEBUG_MODE:
-                dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
+                # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
                 assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
             # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
             return csv_info
@@ -952,7 +953,7 @@ def symbolic_func(config: AbstractConfiguration, i: binary.Instruction, pos_sequ
             output_sk.insert(0, config.term2var.assign_stack_var(subterm_repr))
             ar -= 1
         # Assign the list of super terms
-        config.term2var.set_term(result_repr, list(reversed(output_sk)))
+        config.term2var.set_term(result_repr, output_sk)
 
     elif i.out_arity == 1:
         config.stack.append(Value.from_term(result))
@@ -975,7 +976,7 @@ def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: ty
     opcode_name = term.instr.name
     term_repr = term.repr
     term_vars = stack_var_factory.stack_var(term_repr)
-    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
+    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": term_repr,
                  "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": term_vars, 'push': False, "commutative": term.instr.comm,
                  'storage': any(instr in opcode_name for instr in ["call", "store"]), 'gas': 1, 'size': 1}
@@ -1056,7 +1057,7 @@ def introduce_access(term: Term, access: int, value_repr: typing.Optional[str], 
     term_repr = term.repr
     outpt_sk = stack_var_factory.stack_var(value_repr) if value_repr is not None else (
         stack_var_factory.stack_var(term_repr)) if term.instr.out_arity > 0 else []
-    term_info = {"id": f"{opcode_name}_{access}", "disasm": opcode_name,
+    term_info = {"id": f"{opcode_name}_{access}", "disasm": term_repr,
                  "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": outpt_sk, 'push': False, "commutative": term.instr.comm,
                  'storage': any(instr in opcode_name for instr in ["call", "store"]), 'gas': 1, 'size': 1}

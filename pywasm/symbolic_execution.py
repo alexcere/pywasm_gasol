@@ -76,7 +76,7 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
     else:
         if any(instr in instr_name for instr in ['call', 'global', 'load', 'store']):
             filtered_instrs = [instr for instr in user_instr
-                               if instr['disasm'] in instr_name and instr['id'].endswith(f'_{pos}')]
+                               if instr['disasm'].startswith(f"{instr_name}_{pos}")]
         else:
             filtered_instrs = [instr for instr in user_instr if instr['disasm'] in instr_name and
                                all(cstack[i] == input_var for i, input_var in enumerate(instr['inpt_sk']))]
@@ -92,7 +92,7 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
             cstack.pop(0)
 
         # We introduce the new elements
-        for output_var in assigned_instr['outpt_sk']:
+        for output_var in reversed(assigned_instr['outpt_sk']):
             cstack.insert(0, output_var)
             vars_.add(output_var)
 
