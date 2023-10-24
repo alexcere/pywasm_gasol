@@ -872,8 +872,9 @@ class AbstractConfiguration:
             if global_params.DEBUG_MODE:
                 json_initial = copy.deepcopy(json_sat)
 
-            json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"],
-                                                                                            json_sat["dependencies"])
+            # json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"],
+            #                                                                                 json_sat["dependencies"])
+
             # Sometimes it cannot reconstruct the ids of the solution if a local is accessed, its value stored elsewhere
             # and then another value is stored in the same local
             try:
@@ -976,7 +977,7 @@ def introduce_term(term: Term, current_ops: typing.Dict, new_index_per_instr: ty
     opcode_name = term.instr.name
     term_repr = term.repr
     term_vars = stack_var_factory.stack_var(term_repr)
-    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": term_repr,
+    term_info = {"id": f"{opcode_name}_{new_index_per_instr[opcode_name]}", "disasm": opcode_name,
                  "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": term_vars, 'push': False, "commutative": term.instr.comm,
                  'storage': any(instr in opcode_name for instr in ["call", "store"]), 'gas': 1, 'size': 1}
@@ -1057,7 +1058,7 @@ def introduce_access(term: Term, access: int, value_repr: typing.Optional[str], 
     term_repr = term.repr
     outpt_sk = stack_var_factory.stack_var(value_repr) if value_repr is not None else (
         stack_var_factory.stack_var(term_repr)) if term.instr.out_arity > 0 else []
-    term_info = {"id": f"{opcode_name}_{access}", "disasm": term_repr,
+    term_info = {"id": f"{opcode_name}_{access}", "disasm": opcode_name,
                  "opcode": hex(term.instr.opcode)[2:], "inpt_sk": input_values,
                  "outpt_sk": outpt_sk, 'push': False, "commutative": term.instr.comm,
                  'storage': any(instr in opcode_name for instr in ["call", "store"]), 'gas': 1, 'size': 1}
