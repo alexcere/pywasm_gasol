@@ -740,7 +740,7 @@ class AbstractConfiguration:
     def initialize_stack(self, block: typing.List[binary.Instruction]):
         stack_size, max_stack_size = self.init_stack_size(block)
         stack = Stack()
-        initial_values = [Value.new(convention.symbolic, f"in_{i}") for i in range(stack_size)]
+        initial_values = [Value.new(convention.symbolic, f"in_{i}") for i in reversed(range(stack_size))]
         for val in initial_values:
             stack.append(val)
         self.stack = stack
