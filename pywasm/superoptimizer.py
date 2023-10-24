@@ -57,6 +57,7 @@ def evmx_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], s
     instr_id_to_instr = {instr['id']: instr for instr in sfs['user_instrs']}
     ini_locals = [local_repr[0] for local_repr in sfs["register_changes"]]
     if global_params.DEBUG_MODE:
+        print("Id seq:", id_seq)
         if 'optimal' in optimization_outcome:
             print("Checking...")
             print(symbolic_execution.check_execution_from_ids(sfs, [instr_id for instr_id in id_seq if instr_id != "NOP"]))

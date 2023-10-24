@@ -155,7 +155,7 @@ def execute_instr_id(instr_id: str, cstack: List[var_T], clocals: List[var_T], u
                 cstack.pop(0)
 
         # We introduce the new elements
-        for output_var in instr['outpt_sk']:
+        for output_var in reversed(instr['outpt_sk']):
             cstack.insert(0, output_var)
 
 
