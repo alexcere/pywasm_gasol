@@ -34,8 +34,6 @@ def initialize(arguments: Namespace) -> None:
 
     if arguments.csv_file is not None:
         pywasm.global_params.CSV_FILE = arguments.csv_file
-    else:
-        pywasm.global_params.CSV_FILE = pywasm.global_params.FINAL_FOLDER.joinpath('statistics.csv')
 
     pywasm.global_params.DEBUG_MODE = arguments.debug_mode
 
