@@ -873,7 +873,13 @@ class AbstractConfiguration:
 
             json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"],
                                                                                             json_sat["dependencies"])
-            json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
+            # Sometimes it cannot reconstruct the ids of the solution if a local is accessed, its value stored elsewhere
+            # and then another value is stored in the same local
+            try:
+                json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
+            except:
+                pass
+
             json_sat['block'] = block_name
             store_json(json_sat, block_name)
             final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(json_sat, 100, None)
@@ -1268,7 +1274,7 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack,
     b0 = initial_length(instrs)
     bs = max_sk_sz
     # Number of elements in current ops
-    n_locals = len(current_ops)
+    n_locals = len(local_changes) + 5
     sfs = {'init_progr_len': b0, 'vars': list(used_vars), 'max_sk_sz': bs, "src_ws": initial_stack, "tgt_ws": tgt_stack,
            "user_instrs": list(current_ops.values()), 'dependencies': [*mem_deps, *global_deps],
            'original_instrs': ' '.join((str(instr) for instr in instrs)), 'max_registers_sz': n_locals,

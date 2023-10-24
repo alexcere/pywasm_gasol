@@ -251,8 +251,9 @@ def check_execution_from_ids(sfs: Dict, instr_ids: List[id_T]) -> bool:
     for instr_id in instr_ids:
         execute_instr_id(instr_id, cstack, clocals_list, user_instr)
 
-    print('Len initial', len(sfs['original_instrs_with_ids']))
-    print('Len final', len(instr_ids))
+    if 'original_instrs_with_ids' in sfs:
+        print('Len initial', len(sfs['original_instrs_with_ids']))
+        print('Len final', len(instr_ids))
 
     assert cstack == fstack, 'Ids - Stack do not match'
     # Check only relevant locals
