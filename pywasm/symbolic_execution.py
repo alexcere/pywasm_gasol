@@ -74,9 +74,14 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
     # Remaining instructions: filter those instructions whose disasm matches the instr name and consumes the same
     # values. For call and global instructions, we also use the access position to filter the instruction
     else:
+        # if 'call' in instr_name:
+        #    # Call instructions are of the form call[]_pos(args)
+        #    filtered_instrs = [instr for instr in user_instr
+        #                        if instr['id'].startswith(f"{instr_name}_{pos}")]
         if any(instr in instr_name for instr in ['call', 'global', 'load', 'store']):
+            # Remaining instructions are of the form instr_name(args)_pos
             filtered_instrs = [instr for instr in user_instr
-                               if instr['id'].startswith(f"{instr_name}_{pos}")]
+                               if instr['disasm'] in instr_name and instr['id'].endswith(f'_{pos}')]
         else:
             filtered_instrs = [instr for instr in user_instr if instr['disasm'] in instr_name and
                                all(cstack[i] == input_var for i, input_var in enumerate(instr['inpt_sk']))]
@@ -194,6 +199,7 @@ def ensure_stack_vars_are_unique(user_instr: List[instr_T]) -> bool:
 def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     original_instr: str = sfs['original_instrs']
     user_instr: List[instr_T] = sfs['user_instrs']
+    print(*(instr["disasm"] for instr in user_instr))
     instrs: List[str] = original_instr.split(' ')
     local_changes: List[Tuple[var_T, var_T]] = sfs['register_changes']
     dependencies: List[Tuple[id_T, id_T]] = sfs['dependencies']
