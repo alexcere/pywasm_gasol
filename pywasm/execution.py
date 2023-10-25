@@ -692,6 +692,7 @@ class AbstractConfiguration:
         init_stack = 0
         max_stack = 0
 
+        # First pass to detect how many elements are needed in istack
         for instr in block:
 
             if instr.name == "call":
@@ -710,6 +711,22 @@ class AbstractConfiguration:
                 current_stack = current_stack + diff - consumed_elements + produced_elements
             else:
                 current_stack = current_stack - consumed_elements + produced_elements
+            max_stack = max(current_stack, max_stack)
+
+        # Second pass to detect the max number of elements in the stack
+        max_stack = init_stack
+        current_stack = init_stack
+        for instr in block:
+            if instr.name == "call":
+                instr = ArithmeticLogicUnit.instr_from_call(self, instr)
+            elif instr.name == "call_indirect":
+                instr = ArithmeticLogicUnit.instr_from_call(self, instr)
+            else:
+                pass
+
+            consumed_elements = instr.in_arity
+            produced_elements = instr.out_arity
+            current_stack = current_stack - consumed_elements + produced_elements
             max_stack = max(current_stack, max_stack)
 
         return init_stack, max_stack
@@ -880,13 +897,12 @@ class AbstractConfiguration:
             try:
                 json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
             except Exception:
-                print("GOTCHA")
                 traceback.print_exc()
             json_sat['block'] = block_name
             store_json(json_sat, block_name)
-            csv_info = superopt_from_json(json_sat, block_name, 10)
+            csv_info = superopt_from_json(json_sat, block_name, 10, [str(instr) for instr in basic_block])
             if global_params.DEBUG_MODE:
-                # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
+                dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
                 assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
             # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
             return csv_info
@@ -3064,9 +3080,9 @@ def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
     pd.DataFrame([final_row]).to_csv(global_params.CSV_FILE)
 
 
-def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int):
+def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int, original_instrs: typing.List[str]):
     final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(sfs, tout, None)
-    csv_info = superoptimizer.generate_statistics_info(sfs["original_instrs"], final_block, outcome,
-                                                       solver_time, 10, len(sfs["original_instrs"].split(" ")),
+    csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
+                                                       solver_time, 10, len(original_instrs),
                                                        sfs["init_progr_len"], block_name)
     return csv_info
