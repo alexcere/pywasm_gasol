@@ -1,3 +1,4 @@
+import json
 import typing
 import pandas as pd
 
@@ -144,6 +145,16 @@ def symbolic_exec_from_block(file_name: str):
     with open(file_name, 'r') as f:
         plain_instrs = f.read().split()
         symbolic_exec_from_instrs(plain_instrs)
+
+
+def symbolic_exec_from_sfs(file_name: str):
+    # Generate a runtime directly by loading a file from disk.
+    with open(file_name, 'r') as f:
+        sfs = json.load(f)
+        csv_info = execution.superopt_from_json(sfs, file_name.split(".")[0], 10)
+
+        with open(global_params.CSV_FILE, 'w') as f:
+            json.dump(csv_info, f)
 
 
 Store = execution.Store

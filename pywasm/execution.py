@@ -884,9 +884,7 @@ class AbstractConfiguration:
                 traceback.print_exc()
             json_sat['block'] = block_name
             store_json(json_sat, block_name)
-            final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(json_sat, 100, None)
-            csv_info = superoptimizer.generate_statistics_info([str(instr) for instr in basic_block], final_block, outcome,
-                                                               solver_time, 10, len(block), len(block), block_name)
+            csv_info = superopt_from_json(json_sat, block_name, 10)
             if global_params.DEBUG_MODE:
                 # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
                 assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
@@ -3064,3 +3062,11 @@ def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
     # Execute the block symbolically with the instructions and store the results in a csv file
     final_row = config.exec_symbolic_block(instrs, 'isolated')
     pd.DataFrame([final_row]).to_csv(global_params.CSV_FILE)
+
+
+def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int):
+    final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(sfs, tout, None)
+    csv_info = superoptimizer.generate_statistics_info(sfs["original_instrs"], final_block, outcome,
+                                                       solver_time, 10, len(sfs["original_instrs"].split(" ")),
+                                                       sfs["init_progr_len"], block_name)
+    return csv_info

@@ -11,9 +11,12 @@ def parse_args() -> Namespace:
     ap = ArgumentParser(description='Wasm Block Functional Specification tool')
 
     input_options = ap.add_argument_group('Input options')
+    group_input = input_options.add_mutually_exclusive_group()
     input_options.add_argument('input_file', help='Wasm file to analyze', action='store')
-    input_options.add_argument('-bl', '--block', help='Parses the instructions from plain '
+    group_input.add_argument('-bl', '--block', help='Parses the instructions from plain '
                                                       'representation instead of Wasm', action='store_true', dest='block')
+    group_input.add_argument('-sfs', '--sfs', help='Uses the SFS representation from a JSON file',
+                             action='store_true', dest='sfs')
     input_options.add_argument('-a', '--all', help='Executes all blocks, even if there are no possible '
                                                    'optimization gains', action='store_true', dest='all_blocks')
 
@@ -46,6 +49,8 @@ if __name__ == "__main__":
     initialize(parsed_args)
     if parsed_args.block:
         pywasm.symbolic_exec_from_block(parsed_args.input_file)
+    elif parsed_args.sfs:
+        pywasm.symbolic_exec_from_sfs(parsed_args.input_file)
     else:
         runtime = pywasm.load(parsed_args.input_file)
         # r = runtime.exec('main', [5,6])
