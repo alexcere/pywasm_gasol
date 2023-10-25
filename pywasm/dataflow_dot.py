@@ -48,23 +48,28 @@ def generate_CFG_dot(sfs_json: typing.Dict, dot_file_name):
         local_changes = sfs_json["register_changes"]
         mem_deps = sfs_json["dependencies"]
 
-        stack_var_to_id = {instr['outpt_sk'][0]: instr['id'] for instr in user_instrs if len(instr['outpt_sk']) == 1}
+        stack_var_to_id = {output_var: instr['id'] for instr in user_instrs for output_var in instr['outpt_sk']}
         term_to_id = {}
+
+        # Add first initial terms
         for term in initial_stack:
             dot_for_term(term, user_instrs, term_to_id, stack_var_to_id, f)
 
+        # Then name for locals
+        for local, term in local_changes:
+            dot_for_term(local, user_instrs, term_to_id, stack_var_to_id, f)
+
         add_node("tg_stk", term_to_id, "black", f)
         for term in final_stack:
-            dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
-            add_edge("tg_stk", stack_var_to_id[term], term_to_id, "in", f)
+            if term not in term_to_id:
+                dot_for_term(stack_var_to_id.get(term, term), user_instrs, term_to_id, stack_var_to_id, f)
+            add_edge("tg_stk", stack_var_to_id.get(term, term), term_to_id, "in", f)
 
         store_instrs = [instr for instr in user_instrs if len(instr['outpt_sk']) == 0 or 'call' in instr['id']]
         for store_instr in store_instrs:
             dot_for_term(store_instr['id'], user_instrs, term_to_id, stack_var_to_id, f)
 
         for local, term in local_changes:
-            if local not in term_to_id:
-                dot_for_term(local, user_instrs, term_to_id, stack_var_to_id, f)
             final_id = stack_var_to_id.get(term, None)
             if final_id is not None and final_id not in term_to_id:
                 dot_for_term(stack_var_to_id[term], user_instrs, term_to_id, stack_var_to_id, f)
