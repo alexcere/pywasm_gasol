@@ -29,7 +29,8 @@ def extract_reg_from_id(instr_id: str, ini_locals: List[str]) -> int:
     local_reg = extract_idx_from_id(ini_locals[idx])
     return local_reg
 
-def id2disasm(instr_id: str, user_instr: Dict[str, Dict[str, Any]], ini_locals: List[str]):
+
+def id2disasm(instr_id: str, user_instrs: Dict[str, Dict[str, Any]], ini_locals: List[str]):
     """
     Executes the instr id according to user_instr
     """
@@ -47,8 +48,25 @@ def id2disasm(instr_id: str, user_instr: Dict[str, Dict[str, Any]], ini_locals: 
     elif 'LTEE' in instr_id:
         return f"local.tee[local_index({extract_reg_from_id(instr_id, ini_locals)})]"
 
+    # At this point, there must be a corresponding instruction
+    user_instr = user_instrs[instr_id]
+
+    # Constants has a value field initialized
+    if 'value' in user_instr:
+        return f'{user_instr["disasm"]}[{user_instr["value"]}]'
+
+    # Local gets that do not appear as part of local changes need to be reconstructed with the name of the
+    # local it contains
+    elif 'local.get' in user_instr["disasm"]:
+        output_values = user_instr["outpt_sk"]
+
+        # Ensure the representation is indeed correct
+        if global_params.DEBUG_MODE:
+            assert len(output_values) == 1
+            assert output_values[0].startswith("local_")
+        return f"local.get[local_index({output_values[0].split('_')[1]})]"
     else:
-        return user_instr[instr_id]["disasm"]
+        return user_instr["disasm"]
 
 
 def evmx_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], str, float]:
