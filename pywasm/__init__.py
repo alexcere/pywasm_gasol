@@ -104,12 +104,16 @@ class Runtime:
 
     def all_symbolic_exec(self):
         csv_rows = []
+        n_instrs = 0
         for func_addr, func in enumerate(self.machine.store.function_list):
             print(f"{func_addr} {func.type}")
             if isinstance(func, execution.WasmFunc):
-                csv_rows.extend(self.symbolic_exec_func(func, func_addr))
+                csv_row, n_instr_func = self.symbolic_exec_func(func, func_addr)
+                n_instrs += n_instr_func
+                csv_rows.extend(csv_row)
         # Finally, we store the results in a csv file
         pd.DataFrame(csv_rows).to_csv(global_params.CSV_FILE)
+        print("Total n instrs", n_instrs)
 
 
 # Using the pywasm API.

@@ -20,6 +20,9 @@ from . import dependencies
 from . import symbolic_execution
 from . import superoptimizer
 
+global total
+total = 0
+
 import sys
 # ======================================================================================================================
 # Execution Runtime Structure
@@ -830,10 +833,9 @@ class AbstractConfiguration:
                 initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                                  instr.opcode not in instruction.end_basic_block_instrs]
                 csv_row = self.exec_symbolic_block(initial_block, f"function_{func_address}_block_{i}")
-                print("LENgth", len(csv_row))
                 if csv_row is not None:
                     csv_rows.append(csv_row)
-        return csv_rows
+        return csv_rows, len(self.frame.expr.data)
 
     def print_block(self, stack, memory_accesses, var_accesses, call_accesses):
         print(f"Stack:")
