@@ -821,10 +821,18 @@ class AbstractConfiguration:
                 arity=len(function.type.rets.data),
             )
             self.set_frame(frame)
-            print(f"Analyzing block {i}")
-            csv_row = self.exec_symbolic_block(block, f"function_{func_address}_block_{i}")
-            if csv_row is not None:
-                csv_rows.append(csv_row)
+            # Only consider initial blocks with at least one instruction
+            initial_block = [instr for instr in block if
+                             instr.opcode not in instruction.beginning_basic_block_instrs and
+                             instr.opcode not in instruction.end_basic_block_instrs]
+            if len(initial_block) > 0:
+                print(f"Analyzing block {i}")
+                initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
+                                 instr.opcode not in instruction.end_basic_block_instrs]
+                csv_row = self.exec_symbolic_block(initial_block, f"function_{func_address}_block_{i}")
+                print("LENgth", len(csv_row))
+                if csv_row is not None:
+                    csv_rows.append(csv_row)
         return csv_rows
 
     def print_block(self, stack, memory_accesses, var_accesses, call_accesses):
@@ -847,10 +855,8 @@ class AbstractConfiguration:
         print('\n'.join([f'({idx}, {str(local_instance)})' for idx, local_instance in enumerate(self.frame.local_list)]))
         print("")
 
-    def exec_symbolic_block(self, block: typing.List[binary.Instruction], block_name: str) -> typing.Optional[typing.Dict]:
+    def exec_symbolic_block(self, basic_block: typing.List[binary.Instruction], block_name: str) -> typing.Optional[typing.Dict]:
         # Remove labels
-        basic_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
-                       instr.opcode not in instruction.end_basic_block_instrs]
         # if len(basic_block) > 300:
         #     print("Big!")
         #     return
@@ -3074,9 +3080,11 @@ def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
         arity=None,
     )
     config.set_frame(frame)
+    basic_block = [instr for instr in instrs if instr.opcode not in instruction.beginning_basic_block_instrs and
+                   instr.opcode not in instruction.end_basic_block_instrs]
 
     # Execute the block symbolically with the instructions and store the results in a csv file
-    final_row = config.exec_symbolic_block(instrs, 'isolated')
+    final_row = config.exec_symbolic_block(basic_block, 'isolated')
     pd.DataFrame([final_row]).to_csv(global_params.CSV_FILE)
 
 
