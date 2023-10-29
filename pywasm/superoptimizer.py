@@ -25,7 +25,7 @@ def extract_reg_from_id(instr_id: str, ini_locals: List[str]) -> int:
     # auxiliary local to use. To represent this situation, we introduce a counter that assigns a
     # new local for the given one
     if idx >= len(ini_locals):
-        return idx + len(ini_locals)
+        return idx - len(ini_locals) - 1
     local_reg = extract_idx_from_id(ini_locals[idx])
     return local_reg
 
