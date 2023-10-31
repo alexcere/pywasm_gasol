@@ -881,39 +881,38 @@ class AbstractConfiguration:
         filtered_accesses = process_accesses(var_accesses)
         # filtered_memory_accesses = process_memory_accesses(memory_accesses)
         global_accesses = [var_access for var_access in filtered_accesses if "global" in var_access[1].instr.name]
-        if global_params.ALL_EXECUTED or interesting_block(var_accesses):
-            if global_params.DEBUG_MODE:
-                print("")
-                print("Instructions:")
-                print('\n'.join([str(i) for i in basic_block]))
-                print("")
-                print("")
-                print(f"Final state:")
-                self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
+        if global_params.DEBUG_MODE:
+            print("")
+            print("Instructions:")
+            print('\n'.join([str(i) for i in basic_block]))
+            print("")
+            print("")
+            print(f"Final state:")
+            self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
 
-            json_sat = sfs_with_local_changes(initial_stack, self.stack, memory_accesses, global_accesses, call_accesses,
-                                              basic_block, initial_locals, final_locals, self.max_stack_size, self.term2var)
+        json_sat = sfs_with_local_changes(initial_stack, self.stack, memory_accesses, global_accesses, call_accesses,
+                                          basic_block, initial_locals, final_locals, self.max_stack_size, self.term2var)
 
-            if global_params.DEBUG_MODE:
-                json_initial = copy.deepcopy(json_sat)
+        if global_params.DEBUG_MODE:
+            json_initial = copy.deepcopy(json_sat)
 
-            # json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"],
-            #                                                                                 json_sat["dependencies"])
+        # json_sat["instr_dependencies"] = dependencies.generate_dependency_graph_minimum(json_sat["user_instrs"],
+        #                                                                                 json_sat["dependencies"])
 
-            # Sometimes it cannot reconstruct the ids of the solution if a local is accessed, its value stored elsewhere
-            # and then another value is stored in the same local
-            try:
-                json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
-            except Exception:
-                traceback.print_exc()
-            json_sat['block'] = block_name
-            store_json(json_sat, block_name)
-            csv_info = superopt_from_json(json_sat, block_name, 10, [str(instr) for instr in basic_block])
-            if global_params.DEBUG_MODE:
-                dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
-                assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
-            # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
-            return csv_info
+        # Sometimes it cannot reconstruct the ids of the solution if a local is accessed, its value stored elsewhere
+        # and then another value is stored in the same local
+        try:
+            json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
+        except Exception:
+            traceback.print_exc()
+        json_sat['block'] = block_name
+        store_json(json_sat, block_name)
+        csv_info = superopt_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block])
+        if global_params.DEBUG_MODE:
+            dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
+            assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
+        # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
+        return csv_info
 
 
 def process_accesses(var_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]) -> typing.List[typing.Tuple[int, Term, typing.Optional[Value]]]:

@@ -17,9 +17,6 @@ def parse_args() -> Namespace:
                                                       'representation instead of Wasm', action='store_true', dest='block')
     group_input.add_argument('-sfs', '--sfs', help='Uses the SFS representation from a JSON file',
                              action='store_true', dest='sfs')
-    input_options.add_argument('-a', '--all', help='Executes all blocks, even if there are no possible '
-                                                   'optimization gains', action='store_true', dest='all_blocks')
-
     output_options = ap.add_argument_group('Output options')
     output_options.add_argument('-o', '--output', help="Folder to store blocks' specification",
                                 dest="final_folder", action='store')
@@ -43,7 +40,6 @@ def initialize(arguments: Namespace) -> None:
         pywasm.global_params.CSV_FILE = pywasm.global_params.FINAL_FOLDER.joinpath("statistics.csv")
 
     pywasm.global_params.DEBUG_MODE = arguments.debug_mode
-    pywasm.global_params.ALL_EXECUTED = arguments.all_blocks
 
 
 if __name__ == "__main__":
