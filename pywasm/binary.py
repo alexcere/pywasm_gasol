@@ -435,7 +435,8 @@ class Instruction:
                         instruction.f64_const]:
             # https://stackoverflow.com/questions/47961537/webassembly-f32-const-nan0x200000-means-0x7fa00000-or-0x7fe00000
             # python misinterpret 0x7fa00000 as 0x7fe00000, when encapsulate as built-in float type.
-            o.args = [float(arguments_from_instr(instr_str)[0])]
+            # Generated as int as this is the expected representation in the parser
+            o.args = [int(arguments_from_instr(instr_str)[0])]
             return o
         if o.opcode not in instruction.opcode:
             raise Exception("unsupported opcode", o.opcode)
