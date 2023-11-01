@@ -13,6 +13,7 @@ from . import option
 from . import validation
 from . import symbolic_execution
 from . import global_params
+from . import simplification_rules
 
 
 class Runtime:

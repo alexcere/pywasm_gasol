@@ -1,12 +1,17 @@
 """
-Module to include simplification rules
+Module to include simplification rules.
+Note that Wasm evaluates the operands from bottom to top instead of top
+to bottom, so rules have to be applied in that order.
+For instance, sub(x,y) = y - x, so the rule must be sub(0,x) -> x
 """
 from collections import defaultdict
 from . import execution
 from . import binary
 from . import instruction
 from typing import List, Union, Optional, Tuple, Callable, Dict
+from functools import partial
 
+# IMPORTANT: to instantiate template functions, use partial and not lambda x. It doesn't behave well with iterators
 
 # ====== Auxiliary functions ======
 
@@ -24,36 +29,93 @@ def value_is_one(value: 'execution.Value'):
                       execution.convention.f32, execution.convention.f64]:
         return value.val() == 1
 
+
+def zero(num_type: str):
+    # First determine the value type
+    if num_type == "i32":
+        t = execution.convention.i32
+    elif num_type == "i64":
+        t = execution.convention.i64
+    elif num_type == "f32":
+        t = execution.convention.f32
+    elif num_type == "f64":
+        t = execution.convention.f64
+    else:
+        raise ValueError("Not valid type for zero value function")
+
+    return execution.Value.new(t, 0)
+
+
+def one(num_type: str):
+    # First determine the value type
+    if num_type == "i32":
+        t = execution.convention.i32
+    elif num_type == "i64":
+        t = execution.convention.i64
+    elif num_type == "f32":
+        t = execution.convention.f32
+    elif num_type == "f64":
+        t = execution.convention.f64
+    else:
+        raise ValueError("Not valid type for zero value function")
+
+    return execution.Value.new(t, 1)
+
+
 # ====== Simplification rules ======
 
 
 # === Arithmetic operations ===
 
-def add_x_0(operands: List['execution.Value']):
+def add_0_x(operands: List['execution.Value']):
     if value_is_zero(operands[0]):
         return operands[1]
     elif value_is_zero(operands[1]):
         return operands[0]
 
 
-def sub_x_0(operands: List['execution.Value']):
-    if value_is_zero(operands[1]):
-        return operands[1]
+def sub_0_x(operands: List['execution.Value']):
+    """
+    Consider the arguments are reversed, according to Wasm specification sub(x,y) = y-x
+    """
+    if value_is_zero(operands[0]):
+        return operands[0]
 
 
-def _sub_x_x(num_type: str, operands: List['execution.Value']):
+def sub_x_x(num_type: str, operands: List['execution.Value']):
     if operands[0] == operands[1]:
-        return execution.Value
+        return zero(num_type)
 
 
-def _mul_x_0(num_type: str, operands: List['execution.Value']):
-    pass
+def mul_0_x(num_type: str, operands: List['execution.Value']):
+    if value_is_zero(operands[0]) or value_is_zero(operands[0]):
+        return zero(num_type)
 
 
-def mul_x_1(operands: List[Union['execution.Term', 'execution.Value']]):
+def mul_1_x(operands: List['execution.Value']):
     if value_is_one(operands[0]):
         return operands[1]
     elif value_is_one(operands[1]):
+        return operands[0]
+
+
+def div_1_x(operands: List['execution.Value']):
+    if value_is_one(operands[0]):
+        return operands[1]
+
+
+def div_x_x(number_type: str, operands: List['execution.Value']):
+    if operands[0] == operands[1]:
+        return one(number_type)
+
+
+def rem_1_x(operands: List['execution.Value']):
+    if value_is_one(operands[0]):
+        return operands[1]
+
+
+def rem_x_x(operands: List['execution.Value']):
+    if operands[0] == operands[1]:
         return operands[0]
 
 
@@ -75,7 +137,6 @@ def eq_zero(num_type: str, operands: List['execution.Value']):
 def iszero_iszero_iszero(operands: List['execution.Value']):
     if operands[0].type == binary.convention.term and operands[0].val().instr.opcode == instruction.i32_eqz:
         third_instr = operands[0].val().ops[0]
-        print("Third thing", third_instr)
 
         # Thid instr might be either i32.zero or i64.zero
         if (third_instr.type == binary.convention.term and
@@ -103,12 +164,20 @@ def and_x_x(operands: List['execution.Value']):
 # which it can be applied, textual representation and how many instructions can be decreased.
 # To add a new rule, include a new item following the format
 rules = [
-    (add_x_0, [instruction.i32_add, instruction.i64_add, instruction.f32_add, instruction.f64_add], "[i,f]xx.add(X,0) -> X", 2),
-    (sub_x_0, [instruction.i32_sub, instruction.i64_sub, instruction.f32_sub, instruction.f64_sub], "[i,f]xx.sub(X,0) -> X", 2),
-
-    (mul_x_1, [instruction.i32_mul, instruction.i64_mul, instruction.f32_mul, instruction.f64_mul], "[i,f]xx.mul(X,1) -> X", 2),
-    (lambda ops: eq_zero("i32", ops), [instruction.i32_eq], "i32.eq(X,0) -> i32.eqz(X)", 1),
-    (lambda ops: eq_zero("i64", ops), [instruction.i64_eq], "i64.eq(X,0) -> i64.eqz(X)", 1),
+    (add_0_x, [instruction.i32_add, instruction.i64_add, instruction.f32_add, instruction.f64_add], "any.add(0,X) -> X", 2),
+    (sub_0_x, [instruction.i32_sub, instruction.i64_sub, instruction.f32_sub, instruction.f64_sub], "any.sub(0,X) -> X", 2),
+    *[(partial(sub_x_x, num_type), [instr], f"{num_type}.sub(X,X) -> 0", 2) for num_type, instr in
+      [("i32", instruction.i32_sub), ("i64", instruction.i64_sub), ("f32", instruction.f32_sub), ("f64", instruction.f64_sub)]],
+    *[(partial(mul_0_x, num_type), [instr], f"{num_type}.mul(0,X) -> 0", 2) for num_type, instr in
+      [("i32", instruction.i32_mul), ("i64", instruction.i64_mul), ("f32", instruction.i32_mul), ("f64", instruction.f64_mul)]],
+    (mul_1_x, [instruction.i32_mul, instruction.i64_mul, instruction.f32_mul, instruction.f64_mul], "any.mul(1,X) -> X", 2),
+    (div_1_x, [instruction.i32_divs, instruction.i32_divu, instruction.i64_divs, instruction.i64_divu,
+               instruction.f32_div, instruction.f64_div], "any.div[s,u](1,X) -> X", 2),
+    *[(partial(div_x_x, num_type), instrs, f"{num_type}.div[s,u](X,X) -> 0", 2) for num_type, instrs in
+      [("i32", [instruction.i32_divs, instruction.i32_divu]), ("i64", [instruction.i64_divs, instruction.i64_divu]),
+       ("f32", [instruction.f32_div]), ("f64", [instruction.f64_div])]],
+    (partial(eq_zero, "i32"), [instruction.i32_eq], "i32.eq(X,0) -> i32.eqz(X)", 1),
+    (partial(eq_zero,"i64"), [instruction.i64_eq], "i64.eq(X,0) -> i64.eqz(X)", 1),
     (iszero_iszero_iszero, [instruction.i32_eqz], "i32.eqz(i32.eqz(ixx.eqz(X))) -> ixx.eqz(X)", 2),
     (and_x_0, [instruction.i32_and, instruction.i64_and], "ixx.and(X, 0) -> 0", 2),
     (and_x_x, [instruction.i32_and, instruction.i64_and], "ixx.and(X, X) -> X", 2)
