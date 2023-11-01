@@ -19,6 +19,7 @@ from . import dataflow_dot
 from . import dependencies
 from . import symbolic_execution
 from . import superoptimizer
+from . import simplification_rules
 
 global total
 total = 0
@@ -40,6 +41,9 @@ class Value:
 
     def __str__(self):
         return f'{self.val()}'
+
+    def __eq__(self, other):
+        return isinstance(other, Value) and self.type == other.type and self.val() == other.val()
 
     @classmethod
     def new(cls, type: binary.ValueType, data: typing.Union[int, float, str, 'Term']):
@@ -218,16 +222,31 @@ class Term:
     def __repr__(self):
         return self.repr
 
+    def __eq__(self, other):
+        return isinstance(other, Term) and self.repr == other.repr
+
 
 class TermFactory:
     """
-    Factory to create terms. So far, it only avoids creating repeated terms
+    Factory to create terms. It tries to apply as many rules as possible and also avoids creating repeated terms
     """
     def __init__(self):
         self._terms_created: typing.Dict = {}
+        self.rule_creation = simplification_rules.SimplificationRules()
 
-    def term(self, instr: binary.Instruction, operands: typing.List[typing.Union['Term', Value]],
-             sub_indexes: typing.Optional[typing.List[int]] = None) -> typing.Tuple['Term', str]:
+    def term(self, instr: binary.Instruction, operands: typing.List[typing.Union[Term, Value]],
+             sub_indexes: typing.Optional[typing.List[int]] = None) -> typing.Union[typing.Tuple[Term, str], typing.Tuple[Value, None]]:
+        resulting_term = self.rule_creation.apply_rule(instr, operands)
+
+        # If the resulting term is not None, we have to extract the resulting instruction if any
+        # or return the previous value
+        if resulting_term is not None:
+            if isinstance(resulting_term, Term):
+                instr, operands = resulting_term.instr, resulting_term.ops
+            else:
+                # This means it is a value. We return the value and None
+                return resulting_term, None
+
         term_repr = term_to_string(instr, operands, sub_indexes)
         if term_repr in self._terms_created:
             return self._terms_created[term_repr], term_repr
@@ -828,7 +847,7 @@ class AbstractConfiguration:
             initial_block = [instr for instr in block if
                              instr.opcode not in instruction.beginning_basic_block_instrs and
                              instr.opcode not in instruction.end_basic_block_instrs]
-            if len(initial_block) > 0:
+            if 50 > len(initial_block) > 4:
                 print(f"Analyzing block {i}")
                 initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                                  instr.opcode not in instruction.end_basic_block_instrs]
@@ -890,9 +909,10 @@ class AbstractConfiguration:
             print(f"Final state:")
             self.print_block(self.stack, memory_accesses, var_accesses, call_accesses)
 
+        rules_repr = ', '.join(self.term_factory.rule_creation.rules_applied())
         json_sat = sfs_with_local_changes(initial_stack, self.stack, memory_accesses, global_accesses, call_accesses,
-                                          basic_block, initial_locals, final_locals, self.max_stack_size, self.term2var)
-
+                                          basic_block, initial_locals, final_locals, self.max_stack_size, self.term2var,
+                                          rules_repr)
         if global_params.DEBUG_MODE:
             json_initial = copy.deepcopy(json_sat)
 
@@ -907,7 +927,8 @@ class AbstractConfiguration:
             traceback.print_exc()
         json_sat['block'] = block_name
         store_json(json_sat, block_name)
-        csv_info = superopt_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block])
+        csv_info = superopt_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block],
+                                      rules_repr)
         if global_params.DEBUG_MODE:
             dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
             assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
@@ -954,13 +975,21 @@ def interesting_block(var_accesses: typing.List[typing.Tuple[int, Term, typing.O
 # ======================================================================================================================
 
 
-def symbolic_func(config: AbstractConfiguration, i: binary.Instruction, pos_sequence: int = None) -> Term:
+def symbolic_func(config: AbstractConfiguration, i: binary.Instruction, pos_sequence: int = None) -> typing.Union[Term, Value]:
 
     # First we remove from the stack the elements that have been consumed
     operands = [config.stack.pop() for _ in range(i.in_arity)]
 
     sub_indexes = [pos_sequence] if pos_sequence is not None else None
+    # Only this .term function can return a
     result, result_repr = config.term_factory.term(i, operands, sub_indexes)
+
+    # Additional case: a rule has been applied, and it resulted in a Value. We just need to push the generated value to
+    # the stack
+    if result_repr is None:
+        config.stack.append(result)
+        return result
+
     ar = i.out_arity
     # Then we introduce the values in the stack
     # If ar > 1, then we create a term per introduced value in the stack
@@ -1265,7 +1294,7 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack,
                            global_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]],
                            call_accesses: typing.List[typing.Tuple[int, Term, typing.Optional[Value]]], instrs: typing.List[binary.Instruction],
                            initial_locals: typing.List[Value], final_locals: typing.List[Value], max_sk_sz: int,
-                           stack_var_factory: StackVarFactory) -> typing.Dict:
+                           stack_var_factory: StackVarFactory, rules_repr: str) -> typing.Dict:
     current_ops = {}
     new_index_per_instr = collections.defaultdict(lambda: 0)
 
@@ -1301,7 +1330,7 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack,
     sfs = {'init_progr_len': b0, 'vars': list(used_vars), 'max_sk_sz': bs, "src_ws": initial_stack, "tgt_ws": tgt_stack,
            "user_instrs": list(current_ops.values()), 'dependencies': [*mem_deps, *global_deps],
            'original_instrs': ' '.join((str(instr) for instr in instrs)), 'max_registers_sz': n_locals,
-           'register_changes': local_changes}
+           'register_changes': local_changes, "rules": rules_repr}
     return sfs
 
 
@@ -3089,9 +3118,10 @@ def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
     pd.DataFrame([final_row]).to_csv(global_params.CSV_FILE)
 
 
-def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int, original_instrs: typing.List[str]):
+def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int, original_instrs: typing.List[str],
+                       rules: str):
     final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(sfs, tout, None)
     csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
                                                        solver_time, 10, len(original_instrs),
-                                                       sfs["init_progr_len"], block_name)
+                                                       sfs["init_progr_len"], block_name, rules)
     return csv_info

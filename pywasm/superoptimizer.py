@@ -84,7 +84,7 @@ def evmx_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], s
 
 
 def generate_statistics_info(original_block: List[str], optimized_block: List[str], outcome: str, solver_time: float,
-                             tout: int, initial_bound: int, used_bound: int, block_name: str) -> Dict:
+                             tout: int, initial_bound: int, used_bound: int, block_name: str, rules_repr: str) -> Dict:
 
     statistics_row = {"block_id": block_name,  "previous_solution": ' '.join(original_block), "timeout": tout,
                       "solver_time_in_sec": round(solver_time, 3), "outcome": outcome,
@@ -98,6 +98,7 @@ def generate_statistics_info(original_block: List[str], optimized_block: List[st
         statistics_row.update({"model_found": True, "shown_optimal": shown_optimal,
                                "solution_found": ' '.join(optimized_block),
                                "optimized_n_instrs": len(optimized_block), 'optimized_length': len(optimized_block),
-                               'outcome': 'model', 'saved_length': len(original_block) - len(optimized_block)})
+                               'outcome': 'model', 'saved_length': len(original_block) - len(optimized_block),
+                               "rules": rules_repr})
 
     return statistics_row
