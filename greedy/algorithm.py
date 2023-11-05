@@ -667,6 +667,7 @@ class SMSgreedy:
             if self.debug_mode:
                 assert len(instr['inpt_sk']) == 2, f'Commutative instruction {instr["id"]} has arity != 2'
 
+            # TODO: add condition
             condition = False
             if condition:
                 input_vars = instr['inpt_sk']
@@ -728,6 +729,36 @@ class SMSgreedy:
 
         return optp
 
+    def _debug_initial(self, mops: List[id_T], lops: Set[id_T], sops: List[id_T]):
+        if self.debug_mode:
+            print("---- Initial Ops ----")
+            print('Mops:', mops)
+            print('Lops:', lops)
+            print('Sops:', sops)
+            print("")
+
+    def _debug_loop(self, cstate: SymbolicState, optg: List[id_T], mops: List[id_T], sops: List[id_T], lops: List[id_T]):
+        if self.debug_mode:
+            print("---- While loop ----")
+            print("Ids", optg)
+            print('Ops', mops, sops, lops)
+            print('State', cstate)
+            print("")
+
+    def _debug_drop(self, var_top: var_T, cstate: SymbolicState):
+        if self.debug_mode:
+            print("---- Drop term ----")
+            print("Var Term", var_top)
+            print('State', cstate)
+            print("")
+
+    def _debug_choose_computation(self, next_id: id_T, location: str, cstate: SymbolicState):
+        if self.debug_mode:
+            print("---- Computation chosen ----")
+            print(next_id, location)
+            print(cstate)
+            print("")
+
     def greedy(self) -> List[id_T]:
         cstate: SymbolicState = SymbolicState(self._initial_stack.copy(), self._initial_locals.copy(),
                                               self._var_total_uses, self.debug_mode)
@@ -738,33 +769,16 @@ class SMSgreedy:
         mops: List[id_T] = self.select_memory_ops_order(mops_unsorted)
         optg: List[id_T] = []
 
-        if self.debug_mode:
-            print("---- Initial Ops ----")
-            print('Mops:', mops)
-            print('Lops:', lops)
-            print('Sops:', sops)
-            print("")
+        self._debug_initial(mops, lops, sops)
 
         # For easier code, we end the while when we need to choose an operation and there are no operations left
         while True:
             var_top = cstate.top_stack()
 
-            if self.debug_mode:
-                print("---- While loop ----")
-                print("Ids", optg)
-                print('Ops', mops, sops, lops)
-                print(cstate)
-                print("")
-
             # Top of the stack must be removed, as it appears more time it is being used
             if var_top is not None and cstate.var_uses[var_top] > self._var_total_uses[var_top]:
 
-                if self.debug_mode:
-                    print("---- Drop term ----")
-                    print("Var Term", var_top)
-                    print(cstate)
-                    print("")
-
+                self._debug_drop(var_top, cstate)
                 cstate.drop()
                 optg.append("POP")
 
@@ -781,12 +795,7 @@ class SMSgreedy:
                     break
 
                 next_id, location = self.choose_next_computation(cstate, mops, sops, lops)
-
-                if self.debug_mode:
-                    print("---- Computation chosen ----")
-                    print(next_id, location)
-                    print(cstate)
-                    print("")
+                self._debug_choose_computation(next_id, location, cstate)
 
                 # It is already stored in a local
                 if location == 'local':
@@ -824,7 +833,13 @@ class SMSgreedy:
 if __name__ == "__main__":
     with open(sys.argv[1], 'r') as f:
         sfs = json.load(f)
-    ids = SMSgreedy(sfs, False).greedy()
-
+    ids = SMSgreedy(sfs, True).greedy()
+    print("Original")
+    print("")
+    print(sfs['original_instrs_with_ids'])
+    print("")
+    print("New")
+    print("")
+    print(ids)
     if check_execution_from_ids(sfs, ids):
         print("Check works!!")
