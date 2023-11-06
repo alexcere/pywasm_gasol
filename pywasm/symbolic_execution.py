@@ -20,14 +20,14 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
     """
     Executes the instruction and returns the id from the instruction according to user_instr
     """
-    assigned_instr = None
     # Case const: filter the instruction that has introduces that value
     if 'const' in instr_name:
         const = int(re.search(const_re, instr_name).group(1))
         filtered_instrs = [instr for instr in user_instr if f'const' in instr['disasm'] and instr['value'] == const]
         assert len(filtered_instrs) == 1
-        assigned_instr = filtered_instrs[0]
-        const_var = assigned_instr['outpt_sk'][0]
+        instr = filtered_instrs[0]
+        const_var = instr['outpt_sk'][0]
+        assigned_instr = instr["id"]
         cstack.insert(0, const_var)
         vars_.add(const_var)
 
@@ -48,10 +48,12 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
             assigned_instr = f'LGET_{ilocals.index(local_name)}'
         else:
             # Check it exists exactly one instruction for loading
-            filtered_instrs = [instr for instr in user_instr if len(instr['outpt_sk']) > 0 and instr['outpt_sk'][0] == local_name]
+            filtered_instrs = [instr for instr in user_instr if
+                               len(instr['outpt_sk']) > 0 and instr['outpt_sk'][0] == local_name]
             assert len(filtered_instrs) == 1
-            assigned_instr = filtered_instrs[0]
-            local_val = assigned_instr['outpt_sk'][0]
+            instr = filtered_instrs[0]
+            local_val = instr['outpt_sk'][0]
+            assigned_instr = instr["id"]
             cstack.insert(0, local_val)
             vars_.add(local_val)
 
@@ -89,21 +91,21 @@ def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[
         # print(instr_name, pos, *[(instr['id'], instr['disasm']) for instr in user_instr])
         # print(instr_name, pos, *[(instr['id'], instr['disasm']) for instr in filtered_instrs])
         assert len(filtered_instrs) == 1
-        assigned_instr = filtered_instrs[0]
+        instr = filtered_instrs[0]
 
         # We consume the elements
-        for input_var in assigned_instr['inpt_sk']:
+        for input_var in instr['inpt_sk']:
             assert cstack[0] == input_var
             cstack.pop(0)
 
         # We introduce the new elements
-        for output_var in reversed(assigned_instr['outpt_sk']):
+        for output_var in reversed(instr['outpt_sk']):
             cstack.insert(0, output_var)
             vars_.add(output_var)
 
-    # If assigned_instr has a not null value, then it returns the id associated.
-    # Otherwise, it just returns the instr_name
-    return assigned_instr['id'] if type(assigned_instr) != str else assigned_instr
+        assigned_instr = instr['id']
+
+    return assigned_instr
 
 
 def extract_idx_from_id(instr_id: str) -> int:
@@ -149,7 +151,7 @@ def execute_instr_id(instr_id: str, cstack: List[var_T], clocals: List[var_T], u
             input_vars = instr['inpt_sk']
             assert len(input_vars) == 2, 'Commutative instructions with #args != 2'
             # We consume the elements
-            s0, s1= cstack.pop(0), cstack.pop(0)
+            s0, s1 = cstack.pop(0), cstack.pop(0)
             assert (s0 == input_vars[0] and s1 == input_vars[1]) or (s0 == input_vars[1] and s1 == input_vars[0]), \
                 f"Args don't match in commutative instr {instr_id}"
 
@@ -215,7 +217,8 @@ def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     vars_ = set(clocals.keys())
     vars_.update(cstack)
 
-    final_instr_ids = [execute_instr(instr, i, cstack, clocals, ilocals, vars_, user_instr) for i, instr in enumerate(instrs)]
+    final_instr_ids = [execute_instr(instr, i, cstack, clocals, ilocals, vars_, user_instr) for i, instr in
+                       enumerate(instrs)]
 
     assert ensure_ids_are_unique(user_instr), 'Ids are not unique'
     assert ensure_stack_vars_are_unique(user_instr), 'Stack vars are not unique'
