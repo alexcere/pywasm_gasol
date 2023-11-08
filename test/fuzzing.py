@@ -2,8 +2,10 @@
 Module to generate random sequences of instructions and test the greedy algorithm
 """
 import json
+import shutil
 import sys
 from typing import List
+from pathlib import Path
 import random
 import pywasm
 import greedy
@@ -17,14 +19,20 @@ symbolic = pywasm.symbolic_execution
 # choices = [byte for byte, instr in instruction.opcode_info.items() if instr['type'] != instruction.InstructionType.control
 #            and all(t not in instr["name"] for t in ['i64', 'f32', 'f64'])]
 
-choices = [byte for byte, instr in instruction.opcode_info.items() if "local" in instr["name"] or "call" == instr["name"]]
+def weight(instr_):
+    return 3 if "local" in instr_["name"] else 1
+
+
+pair_choice_weight = [(byte, weight(instr)) for byte, instr in instruction.opcode_info.items() if "indirect" not in instr["name"] and
+                      any(instr_name in instr["name"] for instr_name in ["local", "i32.const", "call", "i32.add", "i32.sub", "i32.neg"])]
+choices = [byte for byte, _ in pair_choice_weight]
 
 def random_opcode() -> str:
     """
     Generates a random opcode in the plain representation format used by pywasm.binary.Instruction.from_plain_repr.
     Uses this representation instead of directly generating binary.Instruction because we avoid processing calls
     """
-    opcode = random.choice(choices)
+    opcode = random.choices(choices,weights=[w for _, w in pair_choice_weight])[0]
 
     # Call instructions have their own format to be parsed
     if opcode == instruction.call:
@@ -45,12 +53,12 @@ def random_opcode() -> str:
         instruction.set_local,
         instruction.tee_local,
     ]:
-        o.args = [binary.LocalIndex(random.randint(0, 5))]
+        o.args = [binary.LocalIndex(random.randint(0, 1))]
     elif opcode in [
         instruction.get_global,
         instruction.set_global,
     ]:
-        o.args = [binary.GlobalIndex(random.randint(0, 5))]
+        o.args = [binary.GlobalIndex(random.randint(0, 1))]
     elif opcode in [
         instruction.i32_load,
         instruction.i64_load,
@@ -116,8 +124,18 @@ def execute_symbolic_execution_and_encoder(instrs: List[str]) -> None:
 
 if __name__ == "__main__":
     n = int(sys.argv[1])
-    plain_instrs = random_block(n)
-    pywasm.global_params.DEBUG_MODE = True # Enable debug mode
-    pywasm.global_params.ALL_EXECUTED = True # Allow executing any block
-    print(' '.join(plain_instrs))
-    execute_symbolic_execution_and_encoder(plain_instrs)
+    n_examples = int(sys.argv[2])
+
+    root_folder = Path(sys.argv[3])
+
+    for j in range(15, 17):
+        final = root_folder.joinpath(f"{j}/")
+        final.mkdir(exist_ok=True, parents=True)
+
+        for i in range(n_examples):
+            plain_instrs = random_block(j)
+            pywasm.global_params.DEBUG_MODE = True # Enable debug mode
+            pywasm.global_params.FINAL_FOLDER = final
+            print(' '.join(plain_instrs))
+            execute_symbolic_execution_and_encoder(plain_instrs)
+            shutil.copy(final.joinpath("isolated.json"), final.joinpath(f"{i}.json"))

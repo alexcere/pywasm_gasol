@@ -1326,7 +1326,7 @@ def sfs_with_local_changes(initial_stack: typing.List[str], final_stack: Stack,
     b0 = initial_length(instrs)
     bs = max_sk_sz
     # Number of elements in current ops
-    n_locals = len(local_changes) + 5
+    n_locals = len(local_changes) + 3
     sfs = {'init_progr_len': b0, 'vars': list(used_vars), 'max_sk_sz': bs, "src_ws": initial_stack, "tgt_ws": tgt_stack,
            "user_instrs": list(current_ops.values()), 'dependencies': [*mem_deps, *global_deps],
            'original_instrs': ' '.join((str(instr) for instr in instrs)), 'max_registers_sz': n_locals,
