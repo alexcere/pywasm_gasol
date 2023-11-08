@@ -928,6 +928,9 @@ class AbstractConfiguration:
         except Exception:
             traceback.print_exc()
         json_sat['block'] = block_name
+        allowed_immediate_dependencies, forbidden_immediate_dependencies = dependencies.immediate_dependencies(json_sat["user_instrs"], json_sat["dependencies"])
+        json_sat["immediate_dependencies"] = allowed_immediate_dependencies
+        json_sat["non_immediate_dependencies"] = forbidden_immediate_dependencies
         store_json(json_sat, block_name)
         if global_params.OPTIMIZER == "greedy":
             csv_info = greedy_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block],
