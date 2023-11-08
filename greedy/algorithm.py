@@ -78,6 +78,9 @@ class SymbolicState:
         self.var_uses = self._computer_var_uses()
         self.liveness: List[bool] = self._compute_initial_liveness()
 
+        # The first len(locals_) must be protected
+        self.protected_locals = len(locals_)
+
     def _computer_var_uses(self):
         var_uses = defaultdict(lambda: 0)
 
@@ -198,17 +201,21 @@ class SymbolicState:
         """
         Choose an available local to store an element. Otherwise, introduces an extra local to store it
         """
-        # By reversing the liveness list, locals that have been introduced are prioritized over the ones that contain
-        # valid values for the final stack
-        # TODO: maybe this decision should also consider the final state somehow
-        for x, is_live in enumerate(reversed(self.liveness)):
-            if not is_live:
-                return len(self.liveness) - x - 1
+        # We only allow storing values in intermediate locals that are not used in the final state
+        for x in range(self.protected_locals, len(self.liveness)):
+            if not self.liveness[x]:
+                return x
 
-        # We just introduce an empty element and initialize the live variable to False
+        # Return -1 if there is no available local to store the value
+        return -1
+
+    def new_local(self) -> int:
+        """
+        Introduces a null local to store an element
+        """
         self.locals.append('')
         self.liveness.append(False)
-        return len(self.locals) - 1
+        return len(self.liveness) - 1
 
     def __repr__(self):
         sentences = [f"Current stack: {self.stack}", "Current locals:",
@@ -367,6 +374,8 @@ class SMSgreedy:
                 ops.append('POP')
             else:
                 x = cstate.available_local()
+                if x == -1:
+                    x = cstate.new_local()
 
                 # We need to set it and not tee because we have to 'remove' it from the stack. It cannot be in its
                 # position because in that case it'd have been stored previously
@@ -453,16 +462,16 @@ class SMSgreedy:
         """
         # We filter those mops that appear as a subterm of another term
         # TODO: Not consider load or get instructions if they can be computed when computing a superterm
-        mops = {id_ for dep in self._deps for id_ in dep if self._dep_graph.out_degree(id_, 'weight') == 0
-                or self._isolated_instr(id_)}
+        mops = {instr["id"] for instr in self._user_instr if any(instr_name in instr["disasm"]
+                                                                 for instr_name in ["call", "store", "global", "load"])}
         sops = [self._var2id[stack_var] for stack_var in self._final_stack
-                if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(
-                self._var2instr[stack_var])]
+                if stack_var in self._var2id and self._var2id[stack_var] not in mops and
+                self._dep_graph.out_degree(self._var2id[stack_var], 'weight') == 0 and not cheap(self._var2instr[stack_var])]
         lops = {self._var2id[stack_var] for stack_var in self._final_locals
-                if stack_var in self._var2id and self._var2id[stack_var] not in mops and not cheap(
-                self._var2instr[stack_var])
-                and self._var_total_uses[stack_var] == 1}
+                if stack_var in self._var2id and self._var2id[stack_var] not in mops and
+                self._dep_graph.out_degree(self._var2id[stack_var], 'weight') == 0 and not cheap(self._var2instr[stack_var])}
         rops = set(self._id2instr.keys()).difference(mops.union(sops).union(lops))
+        print(mops, sops, lops, rops)
         return mops, sops, lops, rops
 
     def select_memory_ops_order(self, mops: Set[id_T]) -> List[id_T]:
@@ -519,6 +528,10 @@ class SMSgreedy:
         if len(positions_available_locals) == 0:
             # No position is available yet, so we just store it one available local
             y = cstate.available_local()
+
+            if y == -1:
+                y = cstate.new_local()
+
             cstate.lset(y, False)
             ops.append(f"LSET_{y}")
 
@@ -545,6 +558,10 @@ class SMSgreedy:
                 ops.append(f"LTEE_{local}")
             else:
                 y = cstate.available_local()
+
+                if y == -1:
+                    y = cstate.new_local()
+
                 cstate.lset(y, False)
                 ops.append(f"LSET_{y}")
 
@@ -649,6 +666,10 @@ class SMSgreedy:
             else:
                 # Otherwise, we assign a new local
                 x = cstate.available_local()
+
+                if x == -1:
+                    x = cstate.new_local()
+
                 cstate.ltee(x, False)
                 seq.append(f"LTEE_{x}")
         return seq
