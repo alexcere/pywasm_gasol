@@ -20,6 +20,8 @@ from . import dependencies
 from . import symbolic_execution
 from . import superoptimizer
 from . import simplification_rules
+import greedy
+
 
 global total
 total = 0
@@ -847,7 +849,7 @@ class AbstractConfiguration:
             initial_block = [instr for instr in block if
                              instr.opcode not in instruction.beginning_basic_block_instrs and
                              instr.opcode not in instruction.end_basic_block_instrs]
-            if 50 > len(initial_block) > 0:
+            if 50 > len(initial_block) > 4:
                 print(f"Analyzing block {i}")
                 initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                                  instr.opcode not in instruction.end_basic_block_instrs]
@@ -927,8 +929,12 @@ class AbstractConfiguration:
             traceback.print_exc()
         json_sat['block'] = block_name
         store_json(json_sat, block_name)
-        csv_info = superopt_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block],
-                                      rules_repr)
+        if global_params.OPTIMIZER == "greedy":
+            csv_info = greedy_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block],
+                                        rules_repr)
+        else:
+            csv_info = superopt_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block],
+                                          rules_repr)
         if global_params.DEBUG_MODE:
             dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
             assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
@@ -3121,6 +3127,15 @@ def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
 def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int, original_instrs: typing.List[str],
                        rules: str):
     final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(sfs, tout, None)
+    csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
+                                                       solver_time, 10, len(original_instrs),
+                                                       sfs["init_progr_len"], block_name, rules)
+    return csv_info
+
+
+def greedy_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int, original_instrs: typing.List[str],
+                       rules: str):
+    final_block, outcome, solver_time = superoptimizer.greedy_to_pywasm(sfs, tout, None)
     csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
                                                        solver_time, 10, len(original_instrs),
                                                        sfs["init_progr_len"], block_name, rules)

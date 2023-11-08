@@ -17,6 +17,7 @@ def parse_args() -> Namespace:
                                                       'representation instead of Wasm', action='store_true', dest='block')
     group_input.add_argument('-sfs', '--sfs', help='Uses the SFS representation from a JSON file',
                              action='store_true', dest='sfs')
+
     output_options = ap.add_argument_group('Output options')
     output_options.add_argument('-o', '--output', help="Folder to store blocks' specification",
                                 dest="final_folder", action='store')
@@ -24,6 +25,14 @@ def parse_args() -> Namespace:
                                 action='store_true', dest='debug_mode')
     output_options.add_argument('-c', '--csv', help="Folder to store blocks' specification",
                                 dest="csv_file", action='store')
+
+    optimization_options = ap.add_argument_group('Optimization options')
+    group_opt = input_options.add_mutually_exclusive_group()
+
+    group_opt.add_argument('-g', '--greedy', help='Enable greedy alone', action='store_true',
+                           dest='greedy')
+    group_opt.add_argument('-ub', '--ub-greedy', help='Enable using the bound from the greedy algorithm in '
+                                                      'the optimization process', action='store', dest='ub_greedy')
 
     return ap.parse_args()
 
@@ -38,6 +47,12 @@ def initialize(arguments: Namespace) -> None:
         pywasm.global_params.CSV_FILE = arguments.csv_file
     else:
         pywasm.global_params.CSV_FILE = pywasm.global_params.FINAL_FOLDER.joinpath("statistics.csv")
+
+    if arguments.greedy:
+        pywasm.global_params.OPTIMIZER = "greedy"
+
+    if arguments.ub_greedy:
+        pywasm.global_params.GREEDY_BOUND = True
 
     pywasm.global_params.DEBUG_MODE = arguments.debug_mode
 
