@@ -2,10 +2,12 @@
 Module to process the results from the superoptimization with the SAT encoder (in the future, possibly with minizinc
 as well)
 """
-
+import resource
+import traceback
 from typing import Dict, Tuple, List, Any
 from . import symbolic_execution, global_params
 from evmopt.evmx.evmx_api import evmx_from_sms
+import greedy.algorithm
 
 
 def extract_idx_from_id(instr_id: str) -> int:
@@ -81,6 +83,25 @@ def evmx_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], s
             print(symbolic_execution.check_execution_from_ids(sfs, [instr_id for instr_id in id_seq if instr_id != "NOP"]))
     return ([id2disasm(instr_id, instr_id_to_instr, ini_locals) for instr_id in id_seq if instr_id != "NOP"],
             optimization_outcome, time)
+
+
+def greedy_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], str, float]:
+    usage_start = resource.getrusage(resource.RUSAGE_SELF)
+    try:
+        id_seq = greedy.algorithm.SMSgreedy(sfs, True).greedy()
+        usage_stop = resource.getrusage(resource.RUSAGE_SELF)
+        optimization_outcome = "non_optimal"
+    except:
+        usage_stop = resource.getrusage(resource.RUSAGE_SELF)
+        traceback.print_exc()
+        id_seq = []
+        optimization_outcome = "error"
+
+    instr_id_to_instr = {instr['id']: instr for instr in sfs['user_instrs']}
+    ini_locals = [local_repr[0] for local_repr in sfs["register_changes"]]
+    return ([id2disasm(instr_id, instr_id_to_instr, ini_locals) for instr_id in id_seq if instr_id != "NOP"],
+            optimization_outcome, usage_stop.ru_utime + usage_stop.ru_stime - usage_start.ru_utime - usage_start.ru_stime)
+
 
 
 def generate_statistics_info(original_block: List[str], optimized_block: List[str], outcome: str, solver_time: float,
