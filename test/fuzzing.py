@@ -2,11 +2,15 @@
 Module to generate random sequences of instructions and test the greedy algorithm
 """
 import json
+import os
 import shutil
 import sys
 from typing import List
 from pathlib import Path
 import random
+
+import pandas as pd
+
 import pywasm
 import greedy
 
@@ -24,7 +28,8 @@ def weight(instr_):
 
 
 pair_choice_weight = [(byte, weight(instr)) for byte, instr in instruction.opcode_info.items() if "indirect" not in instr["name"] and
-                      any(instr_name in instr["name"] for instr_name in ["local", "i32.const", "call", "i32.add", "i32.sub", "i32.neg"])]
+                      any(instr_name in instr["name"] for instr_name in ["local", "i32.const", "call", "i32.load", "i32.store",
+                                                                         "i32.add", "i32.sub", "i32.neg"])]
 choices = [byte for byte, _ in pair_choice_weight]
 
 def random_opcode() -> str:
@@ -127,8 +132,12 @@ if __name__ == "__main__":
     n_examples = int(sys.argv[2])
 
     root_folder = Path(sys.argv[3])
+    fails = root_folder.joinpath(f"fails/")
+    fails.mkdir(exist_ok=True, parents=True)
+    dfs = []
+    n_fails = 0
 
-    for j in range(15, 17):
+    for j in range(3, 17):
         final = root_folder.joinpath(f"{j}/")
         final.mkdir(exist_ok=True, parents=True)
 
@@ -136,6 +145,14 @@ if __name__ == "__main__":
             plain_instrs = random_block(j)
             pywasm.global_params.DEBUG_MODE = True # Enable debug mode
             pywasm.global_params.FINAL_FOLDER = final
+            block_name = f"folder{j}_json_{i}"
+            pywasm.global_params.ISOLATED_NAME = block_name
             print(' '.join(plain_instrs))
-            execute_symbolic_execution_and_encoder(plain_instrs)
-            shutil.copy(final.joinpath("isolated.json"), final.joinpath(f"{i}.json"))
+            try:
+                execute_symbolic_execution_and_encoder(plain_instrs)
+                dfs.append(pd.read_csv(pywasm.global_params.CSV_FILE))
+            except:
+                i -= 1
+                n_fails += 1
+
+    pd.concat(dfs).to_csv("fuzzler.csv")
