@@ -3,7 +3,7 @@ import copy
 import json
 import traceback
 import typing
-
+from types import SimpleNamespace
 import numpy
 import pandas as pd
 import networkx as nx
@@ -849,7 +849,7 @@ class AbstractConfiguration:
             initial_block = [instr for instr in block if
                              instr.opcode not in instruction.beginning_basic_block_instrs and
                              instr.opcode not in instruction.end_basic_block_instrs]
-            if 50 > len(initial_block) > 4:
+            if 80 > len(initial_block) > 0:
                 print(f"Analyzing block {i}")
                 initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                                  instr.opcode not in instruction.end_basic_block_instrs]
@@ -928,8 +928,8 @@ class AbstractConfiguration:
         except Exception:
             traceback.print_exc()
         json_sat['block'] = block_name
-        _, forbidden_immediate_dependencies = dependencies.immediate_dependencies(json_sat["user_instrs"],
-                                                                                  json_sat["dependencies"])
+        allowed_deps, forbidden_immediate_dependencies = dependencies.immediate_dependencies(json_sat["user_instrs"],
+                                                                                             json_sat["dependencies"])
         json_sat["non_immediate_dependencies"] = forbidden_immediate_dependencies
         store_json(json_sat, block_name)
         if global_params.OPTIMIZER == "greedy":
@@ -3129,7 +3129,7 @@ def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
 
 def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int, original_instrs: typing.List[str],
                        rules: str):
-    final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(sfs, tout, None)
+    final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(sfs, tout, SimpleNamespace(config_sat=global_params.CONFIG_SAT, external=global_params.EXTERNAL_SOLVER))
     csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
                                                        solver_time, 10, len(original_instrs),
                                                        sfs["init_progr_len"], block_name, rules)
