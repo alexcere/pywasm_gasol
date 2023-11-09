@@ -928,8 +928,8 @@ class AbstractConfiguration:
         except Exception:
             traceback.print_exc()
         json_sat['block'] = block_name
-        allowed_immediate_dependencies, forbidden_immediate_dependencies = dependencies.immediate_dependencies(json_sat["user_instrs"], json_sat["dependencies"])
-        json_sat["immediate_dependencies"] = allowed_immediate_dependencies
+        _, forbidden_immediate_dependencies = dependencies.immediate_dependencies(json_sat["user_instrs"],
+                                                                                  json_sat["dependencies"])
         json_sat["non_immediate_dependencies"] = forbidden_immediate_dependencies
         store_json(json_sat, block_name)
         if global_params.OPTIMIZER == "greedy":
@@ -939,7 +939,7 @@ class AbstractConfiguration:
             csv_info = superopt_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block],
                                           rules_repr)
         if global_params.DEBUG_MODE:
-            dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
+            # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
             assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
         # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
         return csv_info
@@ -3123,7 +3123,7 @@ def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
                    instr.opcode not in instruction.end_basic_block_instrs]
 
     # Execute the block symbolically with the instructions and store the results in a csv file
-    final_row = config.exec_symbolic_block(basic_block, 'isolated')
+    final_row = config.exec_symbolic_block(basic_block, global_params.ISOLATED_NAME)
     pd.DataFrame([final_row]).to_csv(global_params.CSV_FILE)
 
 

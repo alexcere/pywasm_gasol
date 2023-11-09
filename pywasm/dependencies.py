@@ -49,7 +49,7 @@ def immediate_dependencies(uninterpreted_instrs: typing.List[typing.Dict], order
                         for stack_elem in instruction['outpt_sk']}
     forbidden_ids = set(dep[0] for dep in order_tuples)
 
-    allowed_deps, forbidden_deps = [], []
+    allowed_deps, forbidden_deps = set(), set()
     for instr in uninterpreted_instrs:
         instr_id = instr["id"]
 
@@ -59,8 +59,8 @@ def immediate_dependencies(uninterpreted_instrs: typing.List[typing.Dict], order
             # This means the stack element corresponds to another uninterpreted instruction
             if stack_elem_id is not None:
                 if stack_elem_id in forbidden_ids:
-                    forbidden_deps.append([stack_elem_id, instr_id])
+                    forbidden_deps.add((stack_elem_id, instr_id))
                 else:
-                    allowed_deps.append([stack_elem_id, instr_id])
+                    allowed_deps.add((stack_elem_id, instr_id))
 
-    return allowed_deps, forbidden_deps
+    return [list(dep) for dep in allowed_deps], [list(dep) for dep in forbidden_deps]

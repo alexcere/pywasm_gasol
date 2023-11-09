@@ -5,3 +5,4 @@ DEBUG_MODE: bool = False
 CSV_FILE: Path = Path('statistics.csv')
 OPTIMIZER: str = "sat"
 GREEDY_BOUND: bool = True
+ISOLATED_NAME: str = "isolated"
