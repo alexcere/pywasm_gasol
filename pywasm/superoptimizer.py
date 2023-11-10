@@ -88,11 +88,19 @@ def evmx_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], s
 def greedy_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], str, float]:
     usage_start = resource.getrusage(resource.RUSAGE_SELF)
     try:
-        id_seq = greedy.algorithm.SMSgreedy(sfs, True).greedy()
+        id_seq = greedy.algorithm.SMSgreedy(sfs, global_params.DEBUG_MODE).greedy()
         usage_stop = resource.getrusage(resource.RUSAGE_SELF)
         optimization_outcome = "non_optimal"
+
+        if global_params.DEBUG_MODE:
+            print("Id seq:", id_seq)
+            if 'optimal' in optimization_outcome:
+                print("Checking...")
+                print(symbolic_execution.check_execution_from_ids(sfs, [instr_id for instr_id in id_seq if
+                                                                        instr_id != "NOP"]))
     except:
         usage_stop = resource.getrusage(resource.RUSAGE_SELF)
+        print("EXEC", sfs["block"])
         traceback.print_exc()
         id_seq = []
         optimization_outcome = "error"
