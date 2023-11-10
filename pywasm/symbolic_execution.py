@@ -268,6 +268,9 @@ def check_execution_from_ids(sfs: Dict, instr_ids: List[id_T]) -> bool:
     # Check only relevant locals
     assert clocals_list[:len(flocal_list)] == flocal_list, 'Ids - Locals do not match'
     assert check_deps(instr_ids, dependencies), 'Dependencies are not coherent'
+    for instr in user_instr:
+        if any(instr_name in instr["disasm"] for instr_name in ["call", "global", "load", "store"]):
+            assert instr_ids.count(instr["id"]) == 1, "Mem operation used more than once"
 
     return True
 
