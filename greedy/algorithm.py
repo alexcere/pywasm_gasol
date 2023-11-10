@@ -7,6 +7,8 @@ from typing import List, Dict, Tuple, Any, Set, Optional
 from collections import defaultdict, Counter
 import traceback
 from enum import Enum, unique
+
+import networkx
 import networkx as nx
 from pywasm.symbolic_execution import check_execution_from_ids
 
@@ -43,7 +45,7 @@ def cheap(instr: instr_T) -> bool:
     """
     Cheap computations are those who take one instruction (i.e. inpt_sk is empty)
     """
-    return len(instr['inpt_sk']) == 0
+    return len(instr['inpt_sk']) == 0 and all(instr_name not in instr["disasm"] for instr_name in ["call", "load", "global.store"])
 
 
 @unique
@@ -233,7 +235,11 @@ class SMSgreedy:
         self._var2pos_locals = self._compute_var2pos(self._final_locals)
 
         self._var_total_uses = self._compute_var_total_uses()
-        self._dep_graph = self._compute_dependency_graph()
+        direct_g, indirect_g = self._compute_dependency_graph()
+
+        self._relevant_ops = self.select_ops(direct_g)
+        self._indirect_g = nx.transitive_reduction(nx.transitive_closure_dag(indirect_g).subgraph(self._relevant_ops))
+        self._direct_g = nx.transitive_reduction(nx.transitive_closure_dag(direct_g).subgraph(self._relevant_ops))
 
         # print(nx.find_cycle(self._dep_graph))
 
@@ -242,15 +248,11 @@ class SMSgreedy:
         # nx.transitive_reduction()
         # nx.nx_pydot.write_dot()
         # nx.find_cycle() # for debugging
-        with open('example.dot', 'w') as f:
-            nx.nx_pydot.write_dot(self._dep_graph, f)
 
         # We include another list of local variables to indicate whether it is live or not
         # Condition: a variable is live if it is used somewhere else, or it is in its correct position.
         # As we are considering just the variables with some kind of change for locals, we just need to check if
         # it's used somewhere else (i.e. it is used somewhere else)
-
-        self._relevant_ops = self.select_ops()
         self._values_used = {}
         for instr_id in self._relevant_ops:
             self._compute_values_used(self._id2instr[instr_id], self._relevant_ops, self._values_used)
@@ -261,10 +263,19 @@ class SMSgreedy:
 
         # We need to compute the sub graph over the full dependency graph, as edges could be lost if we use the
         # transitive reduction instead. Hence, we need to compute the transitive_closure of the graph
-        self._trans_sub_graph = nx.transitive_reduction(nx.transitive_closure_dag(self._dep_graph).subgraph(self._relevant_ops))
+        self._trans_sub_graph = nx.transitive_reduction(nx.DiGraph([*self._direct_g.edges, *self._indirect_g.edges]))
+        for node in self._relevant_ops:
+            self._trans_sub_graph.add_node(node)
 
-        with open('example2.dot', 'w') as f:
+        with open('combined.dot', 'w') as f:
             nx.nx_pydot.write_dot(self._trans_sub_graph, f)
+
+        with open('direct.dot', 'w') as f:
+            nx.nx_pydot.write_dot(self._direct_g, f)
+
+        with open('indirect.dot', 'w') as f:
+            nx.nx_pydot.write_dot(self._indirect_g, f)
+
 
     def _compute_var_total_uses(self) -> Dict[var_T, int]:
         """
@@ -296,22 +307,25 @@ class SMSgreedy:
 
         return var2pos
 
-    def _compute_dependency_graph(self) -> nx.DiGraph:
+    def _compute_dependency_graph(self) -> Tuple[nx.DiGraph, nx.DiGraph]:
         # We annotate the edges with direct 0 or 1 to distinguish direct dependencies due to a subterm being embedded
-        edge_list = []
+        direct_graph = nx.DiGraph()
+        indirect_graph = nx.DiGraph()
         for instr in self._user_instr:
             instr_id = instr['id']
+            direct_graph.add_node(instr_id)
+            indirect_graph.add_node(instr_id)
 
             for stack_elem in instr['inpt_sk']:
                 # This means the stack element corresponds to another uninterpreted instruction
                 if stack_elem in self._var2instr:
-                    edge_list.append((self._var2id[stack_elem], instr_id, {'weight': 1}))
+                    direct_graph.add_edge(self._var2id[stack_elem], instr_id)
 
         # We need to consider also the order given by the tuples
         for id1, id2 in self._deps:
-            edge_list.append((id1, id2, {'weight': 0}))
+            indirect_graph.add_edge(id1, id2)
 
-        return nx.DiGraph(edge_list)
+        return direct_graph, indirect_graph
 
     def _compute_values_used(self, instr: instr_T, relevant_ops: List[id_T], value_uses: Dict):
         if instr["id"] in value_uses:
@@ -398,17 +412,17 @@ class SMSgreedy:
         positions_locals = self._var2pos_locals[var_elem]
         return [x for x in positions_locals if cstate.locals[x] == var_elem or not cstate.liveness[x]]
 
-    def select_ops(self):
+    def select_ops(self, direct_g: nx.DiGraph):
         """
         Selects which operations are considered in the algorithm. We consider mem operations (excluding loads with no
         dependencies) and computations that are not subterms
         """
         dep_ids = set(elem for dep in self._deps for elem in dep)
+        # print(*(instr["disasm"] for instr in self._user_instr))
         relevant_operations = [instr["id"] for instr in self._user_instr if
                                any(instr_name in instr["disasm"] for instr_name in ["call", "store", "global"])
                                or ("load" in instr["disasm"] and instr["id"] in dep_ids)
-                               or self._dep_graph.out_degree(instr["id"], 'weight') == 0]
-
+                               or direct_g.out_degree(instr["id"], 'weight') == 0]
         return relevant_operations
 
     def var_must_be_moved(self, var_elem: var_T, cstate: SymbolicState) -> bool:
@@ -495,6 +509,23 @@ class SMSgreedy:
         # First we try to assign an element from the list of final local values if it can be placed in all the gaps
         # We also determine the element which has more
         candidates = [id_ for id_ in dep_graph.nodes if dep_graph.in_degree(id_) == 0]
+
+        # First case: try to determine if there is an element (probably, LOAD or something) that is embedded into other
+        # term and can be both applied
+        for candidate in candidates:
+
+            # Traverse all the operations that use it as a term
+            direct_edges = self._direct_g.out_edges(candidate)
+            for _, out_node in direct_edges:
+                # print("candidate", candidate, out_node)
+                indirect_deps = [dep[0] for dep in dep_graph.in_edges(out_node)]
+                # print("indirect_deps", out_node, indirect_deps)
+                if len(indirect_deps) == 0 or indirect_deps == [candidate]:
+                    dep_graph.remove_node(candidate)
+                    self._indirect_g.remove_node(candidate)
+                    self._direct_g.remove_node(candidate)
+                    print(f"Using {out_node} instead of {candidate}")
+                    return out_node, 'lops'
 
         for id_ in candidates:
             top_instr = self._id2instr[id_]
