@@ -156,7 +156,11 @@ def symbolic_exec_from_sfs(file_name: str):
     # Generate a runtime directly by loading a file from disk.
     with open(file_name, 'r') as f:
         sfs = json.load(f)
-        csv_info = execution.superopt_from_json(sfs, file_name.split(".")[0], 10, sfs["original_instrs"].split(" ") ,"")
+        if global_params.OPTIMIZER == "greedy":
+            csv_info = execution.greedy_from_json(sfs, file_name.split(".")[0], 10, sfs["original_instrs"].split(" ") ,"")
+        else:
+            csv_info = execution.superopt_from_json(sfs, file_name.split(".")[0], 10, sfs["original_instrs"].split(" ") ,"")
+
         pd.DataFrame([csv_info]).to_csv(global_params.CSV_FILE)
 
 
