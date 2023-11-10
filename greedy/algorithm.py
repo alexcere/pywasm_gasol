@@ -163,12 +163,10 @@ class SymbolicState:
         self.var_uses[stack_var] -= 1
         # Liveness: not affected by dropping an element
 
-    def uf(self, instr: instr_T) -> List[var_T]:
+    def uf(self, instr: instr_T, consumed_elements: List[var_T]):
         """
         Symbolic execution of instruction instr. Additionally, checks the arguments match if debug mode flag is enabled
         """
-        consumed_elements = [self.stack.pop(0) for _ in range(len(instr['inpt_sk']))]
-
         # Neither liveness nor var uses are affected by consuming elements, as these elements are just being embedded
         # into a new term
 
@@ -625,10 +623,11 @@ class SMSgreedy:
             if condition:
                 input_vars = instr['inpt_sk']
             else:
-                input_vars = reversed(instr['inpt_sk'])
+                input_vars = list(reversed(instr['inpt_sk']))
         else:
-            input_vars = reversed(instr['inpt_sk'])
+            input_vars = list(reversed(instr['inpt_sk']))
 
+        piled_values = []
         for stack_var in input_vars:
             local = cstate.local_with_value(stack_var)
             top_elem = cstate.top_stack()
@@ -639,14 +638,19 @@ class SMSgreedy:
             elif top_elem is not None and top_elem == stack_var:
                 # If it is the topmost element, we store it in a local if it is needed more than once and is not cheap
                 top_instr = self._var2instr.get(top_elem, None)
-                if top_instr is not None and not cheap(top_instr) and cstate.var_uses[top_elem] < self._var_total_uses[top_elem]:
+
+                if (top_instr is None or not cheap(top_instr)) and cstate.var_uses[top_elem] < self._var_total_uses[top_elem]:
                     self.move_top_to_position(top_elem, cstate, True)
             else:
                 # Otherwise, we must return generate it with a recursive call
                 seq.extend(self.compute_var(stack_var, cstate))
 
+            # We consume the element for the corresponding operation
+            # Neither liveness nor count are affected at this step
+            piled_values.insert(0, cstate.stack.pop(0))
+
         # Finally, we compute the element
-        cstate.uf(instr)
+        cstate.uf(instr, piled_values)
         seq.append(instr["id"])
         return seq
 
