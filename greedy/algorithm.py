@@ -256,8 +256,8 @@ class SMSgreedy:
             self._compute_values_used(self._id2instr[instr_id], self._relevant_ops, self._values_used)
 
         self._top_can_be_used = {}
-        for instr_id in self._relevant_ops:
-            self._compute_top_can_used(self._id2instr[instr_id], self._relevant_ops, self._top_can_be_used)
+        for instr in self._user_instr:
+            self._compute_top_can_used(instr, self._top_can_be_used)
 
         # We need to compute the sub graph over the full dependency graph, as edges could be lost if we use the
         # transitive reduction instead. Hence, we need to compute the transitive_closure of the graph
@@ -332,7 +332,7 @@ class SMSgreedy:
         value_uses[instr["id"]] = current_uses
         return current_uses
 
-    def _compute_top_can_used(self, instr: instr_T, relevant_ops: List[id_T], top_can_be_used: Dict):
+    def _compute_top_can_used(self, instr: instr_T, top_can_be_used: Dict):
         """
         Computes for each instruction if the topmost element of the stack can be reused directly at some point.
         It considers commutative operations
@@ -350,12 +350,11 @@ class SMSgreedy:
                 if instr_bef is not None:
                     instr_bef_id = instr_bef["id"]
                     if instr_bef_id not in top_can_be_used:
-                        current_uses.update(self._compute_values_used(instr_bef, relevant_ops, top_can_be_used))
+                        current_uses.update(self._compute_top_can_used(instr_bef, top_can_be_used))
                     else:
                         current_uses.update(top_can_be_used[instr_bef_id])
                     # Add only instructions that are relevant to our context
-                    if instr_bef_id in relevant_ops:
-                        current_uses.add(stack_var)
+                    current_uses.add(stack_var)
             else:
                 break
             first_element = False
@@ -490,6 +489,8 @@ class SMSgreedy:
         # stack var. If > 1, we can chain one ltee that could save 1 instruction
         candidate = None
         max_number_solved = 0
+        reuses_top = False
+        current_top = cstate.top_stack()
 
         # First we try to assign an element from the list of final local values if it can be placed in all the gaps
         # We also determine the element which has more
@@ -517,11 +518,15 @@ class SMSgreedy:
                 all_solved = all_solved and len(pos_flocals) == len(avail_solved_flocals)
                 number_solved = max(number_solved, len(avail_solved_flocals))
 
-            if all_solved:
+            uses_top = current_top is not None and current_top in self._top_can_be_used[id_]
+
+            if all_solved and uses_top:
                 return id_, 'lops'
-            # >= to ensure at least one operation is solved
-            elif number_solved >= max_number_solved:
+            # Condition: now it reuses top or solves more operations
+            elif uses_top and (uses_top != reuses_top or number_solved >= max_number_solved):
                 candidate = id_
+                max_number_solved = number_solved
+                reuses_top = uses_top
 
         if candidate is None:
             candidate = candidates[0]
@@ -604,9 +609,13 @@ class SMSgreedy:
             if self.debug_mode:
                 assert len(instr['inpt_sk']) == 2, f'Commutative instruction {instr["id"]} has arity != 2'
 
-            # TODO: add condition
-            condition = False
-            if condition:
+            # Condition: the top of the stack can be reused
+            topmost_element = cstate.top_stack()
+            first_arg_instr = self._var2instr.get(instr['inpt_sk'][0], None)
+
+            # Condition: the topmost element can be reused by the first argument instruction
+            if (topmost_element is not None and topmost_element in self._top_can_be_used[instr["id"]] and
+                    first_arg_instr is not None and topmost_element in self._top_can_be_used[first_arg_instr["id"]]):
                 input_vars = instr['inpt_sk']
             else:
                 input_vars = list(reversed(instr['inpt_sk']))
