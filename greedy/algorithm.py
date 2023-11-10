@@ -274,6 +274,7 @@ class SMSgreedy:
         self._top_can_be_used = {}
         for instr_id in self._relevant_ops:
             self._compute_top_can_used(self._id2instr[instr_id], self._relevant_ops, self._top_can_be_used)
+        print(self._relevant_ops, self._dep_graph.nodes)
         # We need to compute the sub graph over the full dependency graph, as edges could be lost if we use the
         # transitive reduction instead. Hence, we need to compute the transitive_closure of the graph
         self._trans_sub_graph = nx.transitive_reduction(nx.transitive_closure_dag(self._dep_graph).subgraph(self._relevant_ops))
@@ -321,20 +322,11 @@ class SMSgreedy:
                 # This means the stack element corresponds to another uninterpreted instruction
                 if stack_elem in self._var2instr:
                     edge_list.append((self._var2id[stack_elem], instr_id, {'weight': 1}))
-                # Otherwise, it corresponds to either a local or an initial element in the stack. We just add locals
-                elif 'local' in stack_elem:
-                    edge_list.append((stack_elem, instr_id, {'weight': 1}))
 
         # We need to consider also the order given by the tuples
         for id1, id2 in self._deps:
             edge_list.append((id1, id2, {'weight': 0}))
 
-        # Also, the dependencies induced among locals that are live
-        for ini_var, final_var in self._local_changes:
-            # Either final var corresponds to a computation and appears in var2id or it is another local, which
-            # we are referencing using the same name
-            final_id = self._var2id.get(final_var, final_var)
-            edge_list.append((ini_var, final_id, {'weight': 0}))
         return nx.DiGraph(edge_list)
 
     def _compute_values_used(self, instr: instr_T, relevant_ops: List[id_T], value_uses: Dict):
@@ -509,6 +501,7 @@ class SMSgreedy:
         Returns an element from mops, sops or lops and where it came from (mops, sops or lops)
         TODO: Here we should try to devise a good heuristics to select the terms
         """
+
         # To determine the best candidate, we annotate which element can solve the most number of locals for the same
         # stack var. If > 1, we can chain one ltee that could save 1 instruction
         candidate = None
@@ -646,7 +639,7 @@ class SMSgreedy:
             elif top_elem is not None and top_elem == stack_var:
                 # If it is the topmost element, we store it in a local if it is needed more than once and is not cheap
                 top_instr = self._var2instr.get(top_elem, None)
-                if top_instr is not None and not cheap(top_instr) and cstate.var_uses(top_elem) < self._var_total_uses(top_elem):
+                if top_instr is not None and not cheap(top_instr) and cstate.var_uses[top_elem] < self._var_total_uses[top_elem]:
                     self.move_top_to_position(top_elem, cstate, True)
             else:
                 # Otherwise, we must return generate it with a recursive call
@@ -694,16 +687,20 @@ class SMSgreedy:
             else:
                 cstate.lget(x)
                 optp.append(f"LGET_{x}")
-                stack_idx -= 1
+            stack_idx -= 1
 
         # Then we detect which locals have a value that appears in flocals and load them onto the stack
         outdated_locals = []
         for local_idx in range(len(self._final_locals)):
             if self._final_locals[local_idx] != cstate.locals[local_idx]:
-                x = cstate.local_with_value(self._final_locals[local_idx])
+                final_element = self._final_locals[local_idx]
+                x = cstate.local_with_value(final_element)
                 outdated_locals.append(local_idx)
-                cstate.lget(x)
-                optp.append(f"LGET_{x}")
+                if x == -1:
+                    optp.extend(self.compute_instr(self._var2instr[final_element], cstate))
+                else:
+                    cstate.lget(x)
+                    optp.append(f"LGET_{x}")
 
             local_idx += 1
 
