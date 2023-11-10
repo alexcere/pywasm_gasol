@@ -488,8 +488,8 @@ class SMSgreedy:
         # To determine the best candidate, we annotate which element can solve the most number of locals for the same
         # stack var. If > 1, we can chain one ltee that could save 1 instruction
         candidate = None
-        max_number_solved = 0
-        reuses_top = False
+        min_unsolved = len(cstate.locals) + 1
+        min_uses_top = False
         current_top = cstate.top_stack()
 
         # First we try to assign an element from the list of final local values if it can be placed in all the gaps
@@ -499,15 +499,11 @@ class SMSgreedy:
         for id_ in candidates:
             top_instr = self._id2instr[id_]
 
-            # TODO: future maybe allow choosing operations that had been already chosen to allow just computing them
-            #  from the stack and placing them in their positions
-
             # If there is an operation whose produced elements can be placed in all locals, we choose that element
             all_solved = True
-            number_solved = 0
+            not_solved = len(cstate.locals) + 1
 
             # Call instructions might generate multiple values that we should take into account
-            # TODO: maybe resolve ties somehow?
             for out_var in top_instr['outpt_sk']:
                 # TODO consider in locals that can be solved how the operation could liberate some local registers
                 avail_solved_flocals = self._locals_that_can_be_solved(out_var, cstate)
@@ -516,17 +512,17 @@ class SMSgreedy:
                 # Current heuristics: select as a candidate the instruction with the most number of positions that
                 # can be solved
                 all_solved = all_solved and len(pos_flocals) == len(avail_solved_flocals)
-                number_solved = max(number_solved, len(avail_solved_flocals))
+                not_solved = min(not_solved, len(pos_flocals) - len(avail_solved_flocals))
 
             uses_top = current_top is not None and current_top in self._top_can_be_used[id_]
 
             if all_solved and uses_top:
                 return id_, 'lops'
             # Condition: now it reuses top or solves more operations
-            elif uses_top and (uses_top != reuses_top or number_solved >= max_number_solved):
+            elif uses_top and (uses_top != min_uses_top or not_solved <= min_unsolved):
                 candidate = id_
-                max_number_solved = number_solved
-                reuses_top = uses_top
+                min_uses_top = not_solved
+                min_uses_top = uses_top
 
         if candidate is None:
             candidate = candidates[0]
