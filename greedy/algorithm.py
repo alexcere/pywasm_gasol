@@ -428,10 +428,10 @@ class SMSgreedy:
         Selects which operations are considered in the algorithm. We consider mem operations (excluding loads with no
         dependencies) and computations that are not subterms
         """
-
+        dep_ids = set(elem for dep in self._deps for elem in dep)
         relevant_operations = [instr["id"] for instr in self._user_instr if
                                any(instr_name in instr["disasm"] for instr_name in ["call", "store", "global"])
-                               or ("load" in instr["disasm"] and all(instr["id"] != elem for dep in self._deps for elem in dep))
+                               or ("load" in instr["disasm"] and instr["id"] not in dep_ids)
                                or self._dep_graph.out_degree(instr["id"], 'weight') == 0]
 
         return relevant_operations
@@ -509,31 +509,6 @@ class SMSgreedy:
         Returns an element from mops, sops or lops and where it came from (mops, sops or lops)
         TODO: Here we should try to devise a good heuristics to select the terms
         """
-
-        # First we try to assign the next element which is top of the stack
-        top_idx = idx_wrt_fstack(0, cstate.stack, self._final_stack) - 1
-        if 0 <= top_idx < len(self._final_stack):
-            top_var = self._final_stack[top_idx]
-            top_id = self._var2id.get(top_var, None)
-
-            # It corresponds to an initial value that should have been stored in a local
-            if top_id is None:
-                x = cstate.local_with_value(top_var)
-
-                if x == -1:
-                    raise ValueError("Initial value from choose_next_computation is not stored in a local")
-
-                return top_var, 'local'
-
-            instr = self._var2instr[top_var]
-            # Cheap instruction can be computed directly
-            if cheap(instr):
-                return top_id, 'cheap'
-
-            # If it is cheap to compute or has no dependencies, we can choose it
-            elif dep_graph.in_degree(top_id) == 0:
-                return top_id, 'sops'
-
         # To determine the best candidate, we annotate which element can solve the most number of locals for the same
         # stack var. If > 1, we can chain one ltee that could save 1 instruction
         candidate = None

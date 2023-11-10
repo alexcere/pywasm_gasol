@@ -849,7 +849,7 @@ class AbstractConfiguration:
             initial_block = [instr for instr in block if
                              instr.opcode not in instruction.beginning_basic_block_instrs and
                              instr.opcode not in instruction.end_basic_block_instrs]
-            if 80 > len(initial_block) > 0:
+            if 1000 > len(initial_block) > 4:
                 print(f"Analyzing block {i}")
                 initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                                  instr.opcode not in instruction.end_basic_block_instrs]
