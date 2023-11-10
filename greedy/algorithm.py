@@ -46,17 +46,6 @@ def cheap(instr: instr_T) -> bool:
     return len(instr['inpt_sk']) == 0
 
 
-def remove_computation(id_: id_T, location: str, mops: List[id_T], sops: List[id_T], lops: Set[id_T]) -> None:
-    if location == 'mops':
-        mops.pop(0)
-    elif location == 'sops':
-        sops.pop(0)
-    elif location == 'lops':
-        lops.remove(id_)
-    else:
-        raise ValueError(f"Location {location} in _remove_computation is not valid")
-
-
 @unique
 class Location(Enum):
     stack = 0
@@ -163,13 +152,13 @@ class SymbolicState:
         self.var_uses[stack_var] -= 1
         # Liveness: not affected by dropping an element
 
-    def uf(self, instr: instr_T, consumed_elements: List[var_T]):
+    def uf(self, instr: instr_T):
         """
         Symbolic execution of instruction instr. Additionally, checks the arguments match if debug mode flag is enabled
         """
+        consumed_elements = [self.stack.pop(0) for _ in range(len(instr['inpt_sk']))]
         # Neither liveness nor var uses are affected by consuming elements, as these elements are just being embedded
         # into a new term
-
         # Debug mode to check the pop args from the stack match
         if self.debug_mode:
             if instr['commutative']:
@@ -180,14 +169,11 @@ class SymbolicState:
                 # Compare them as lists
                 assert consumed_elements == instr['inpt_sk'], \
                     f"{instr['id']} is not consuming the correct elements from the stack"
-
         # We introduce the new elements
         for output_var in instr['outpt_sk']:
             self.stack.insert(0, output_var)
-
             # Var uses: increase one for each generated stack var
             self.var_uses[output_var] += 1
-
             # Liveness: not affected because we are not managing the stack
 
         return instr['outpt_sk']
@@ -272,7 +258,7 @@ class SMSgreedy:
         self._top_can_be_used = {}
         for instr_id in self._relevant_ops:
             self._compute_top_can_used(self._id2instr[instr_id], self._relevant_ops, self._top_can_be_used)
-        print(self._relevant_ops, self._dep_graph.nodes)
+
         # We need to compute the sub graph over the full dependency graph, as edges could be lost if we use the
         # transitive reduction instead. Hence, we need to compute the transitive_closure of the graph
         self._trans_sub_graph = nx.transitive_reduction(nx.transitive_closure_dag(self._dep_graph).subgraph(self._relevant_ops))
@@ -421,7 +407,7 @@ class SMSgreedy:
         dep_ids = set(elem for dep in self._deps for elem in dep)
         relevant_operations = [instr["id"] for instr in self._user_instr if
                                any(instr_name in instr["disasm"] for instr_name in ["call", "store", "global"])
-                               or ("load" in instr["disasm"] and instr["id"] not in dep_ids)
+                               or ("load" in instr["disasm"] and instr["id"] in dep_ids)
                                or self._dep_graph.out_degree(instr["id"], 'weight') == 0]
 
         return relevant_operations
@@ -627,7 +613,7 @@ class SMSgreedy:
         else:
             input_vars = list(reversed(instr['inpt_sk']))
 
-        piled_values = []
+        first_element = True
         for stack_var in input_vars:
             local = cstate.local_with_value(stack_var)
             top_elem = cstate.top_stack()
@@ -635,22 +621,28 @@ class SMSgreedy:
                 # If it's already stored in a local, we just retrieve it
                 cstate.lget(local)
                 seq.append(f"LGET_{local}")
-            elif top_elem is not None and top_elem == stack_var:
-                # If it is the topmost element, we store it in a local if it is needed more than once and is not cheap
-                top_instr = self._var2instr.get(top_elem, None)
 
-                if (top_instr is None or not cheap(top_instr)) and cstate.var_uses[top_elem] < self._var_total_uses[top_elem]:
-                    self.move_top_to_position(top_elem, cstate, True)
+            elif first_element and top_elem is not None and top_elem == stack_var:
+                # If it is the topmost element, we store it in a local if it is needed more than once and is not cheap
+                # Only allow this step if for the first arg consumed
+
+                if cstate.var_uses[top_elem] < self._var_total_uses[top_elem]:
+                    top_instr = self._var2instr.get(top_elem, None)
+
+                    # Only storee it in a local if needed
+                    if not cheap(top_instr):
+                        seq.extend(self.move_top_to_position(top_elem, cstate, True))
+                    else:
+                        seq.extend(self.compute_var(top_elem,cstate))
+
             else:
                 # Otherwise, we must return generate it with a recursive call
                 seq.extend(self.compute_var(stack_var, cstate))
 
-            # We consume the element for the corresponding operation
-            # Neither liveness nor count are affected at this step
-            piled_values.insert(0, cstate.stack.pop(0))
+            first_element = False
 
         # Finally, we compute the element
-        cstate.uf(instr, piled_values)
+        cstate.uf(instr)
         seq.append(instr["id"])
         return seq
 
