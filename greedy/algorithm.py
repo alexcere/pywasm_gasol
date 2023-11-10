@@ -250,8 +250,7 @@ class SMSgreedy:
 
         self._var_total_uses = self._compute_var_total_uses()
         self._dep_graph = self._compute_dependency_graph()
-        self._instr_dep_graph = self._dep_graph.edge_subgraph((u, v) for u, v, info in self._dep_graph.edges(data=True)
-                                                              if info['weight'] > 0)
+
         # print(nx.find_cycle(self._dep_graph))
 
         # Nx interesting functions
@@ -267,12 +266,17 @@ class SMSgreedy:
         # As we are considering just the variables with some kind of change for locals, we just need to check if
         # it's used somewhere else (i.e. it is used somewhere else)
 
-        self._mops, self._sops, self._lops, self._rops = self.split_ids_into_categories()
+        self._relevant_ops = self.select_ops()
+        self._values_used = {}
+        for instr_id in self._relevant_ops:
+            self._compute_values_used(self._id2instr[instr_id], self._relevant_ops, self._values_used)
 
+        self._top_can_be_used = {}
+        for instr_id in self._relevant_ops:
+            self._compute_top_can_used(self._id2instr[instr_id], self._relevant_ops, self._top_can_be_used)
         # We need to compute the sub graph over the full dependency graph, as edges could be lost if we use the
         # transitive reduction instead. Hence, we need to compute the transitive_closure of the graph
-        self._trans_sub_graph = nx.transitive_reduction(nx.transitive_closure_dag(self._dep_graph).subgraph(
-            itertools.chain.from_iterable([self._mops, self._sops, self._lops])))
+        self._trans_sub_graph = nx.transitive_reduction(nx.transitive_closure_dag(self._dep_graph).subgraph(self._relevant_ops))
 
         with open('example2.dot', 'w') as f:
             nx.nx_pydot.write_dot(self._trans_sub_graph, f)
@@ -333,89 +337,55 @@ class SMSgreedy:
             edge_list.append((ini_var, final_id, {'weight': 0}))
         return nx.DiGraph(edge_list)
 
-    def _choose_local_to_store(self, var_elem: var_T, clocals_liveness: List[bool]) -> local_index_T:
-        """
-        Given an element, decides in which local it is going to be stored. If there are no locals available,
-        introduces a new local and stores it there. Returns the index of the local it is being stored
-        """
+    def _compute_values_used(self, instr: instr_T, relevant_ops: List[id_T], value_uses: Dict):
+        if instr["id"] in value_uses:
+            return value_uses[instr["id"]]
 
-        # First we check whether the corresponding var elem appears in some final local and the contained value
-        # is not used
-        for x, final_local in enumerate(self._final_locals):
-            if var_elem == final_local and not clocals_liveness[x]:
-                return x
+        current_uses = set()
+        for stack_var in instr["inpt_sk"]:
+            instr_bef = self._var2instr.get(stack_var, None)
+            if instr_bef is not None:
+                instr_bef_id = instr_bef["id"]
+                if instr_bef_id not in value_uses:
+                    current_uses.update(self._compute_values_used(instr_bef, relevant_ops, value_uses))
+                else:
+                    current_uses.update(value_uses[instr_bef_id])
+                # Add only instructions that are relevant to our context
+                if instr_bef_id in relevant_ops:
+                    current_uses.add(stack_var)
+        value_uses[instr["id"]] = current_uses
+        return current_uses
 
-        # We traverse the locals to find a dead local in reversed order to prioritize added locals
-        # If there is not such we need to add a new local to store the term
-        return next((i for i in range(len(clocals_liveness) - 1, -1, -1) if clocals_liveness[i]),
-                    len(clocals_liveness))
+    def _compute_top_can_used(self, instr: instr_T, relevant_ops: List[id_T], top_can_be_used: Dict):
+        """
+        Computes for each instruction if the topmost element of the stack can be reused directly at some point.
+        It considers commutative operations
+        """
+        if instr["id"] in top_can_be_used:
+            return top_can_be_used[instr["id"]]
 
-    def _can_be_computed(self, var_elem: var_T) -> bool:
-        """
-        A var element can be computed if it has no dependencies with instructions that have not been computed yet
-        """
-        instr_id = self._var2id.get(var_elem, None)
-        # This should never contain a value
-        assert instr_id is not None
-        return True
-
-    def _place_stack_elem_in_position(self, cstate: SymbolicState, positions: List[int]) -> List[id_T]:
-        """
-        Given a the set of positions an element must appear in a stack, it places them in their corresponding
-        position by traversing the stack, storing the intermediate elements and loading them
-        in reversed order.
-        """
-        ops = []
-        deepest_position = max(positions)
-        for i in range(deepest_position + 1):
-            # If the element is already stored in a local, we just drop it
-            if cstate.local_with_value(cstate.stack[i]) != -1:
-                cstate.drop()
-                ops.append('POP')
+        current_uses = set()
+        comm = instr["commutative"]
+        first_element = True
+        for stack_var in reversed(instr["inpt_sk"]):
+            # We only consider the first element if the operation is not commutative, or both elements otherwise
+            if comm or first_element:
+                instr_bef = self._var2instr.get(stack_var, None)
+                if instr_bef is not None:
+                    instr_bef_id = instr_bef["id"]
+                    if instr_bef_id not in top_can_be_used:
+                        current_uses.update(self._compute_values_used(instr_bef, relevant_ops, top_can_be_used))
+                    else:
+                        current_uses.update(top_can_be_used[instr_bef_id])
+                    # Add only instructions that are relevant to our context
+                    if instr_bef_id in relevant_ops:
+                        current_uses.add(stack_var)
             else:
-                x = cstate.available_local()
-                if x == -1:
-                    x = cstate.new_local()
+                break
+            first_element = False
 
-                # We need to set it and not tee because we have to 'remove' it from the stack. It cannot be in its
-                # position because in that case it'd have been stored previously
-                cstate.lset(x, False)
-                ops.append(f"LSET_{x}")
-
-        idx = top_relative_position_to_fstack(cstate.stack, self._final_stack)
-        local_to_retrieve = cstate.local_with_value(self._final_stack[idx])
-        # Then we place the elements from locals to the stack when possible
-        while idx >= 0 and local_to_retrieve != -1:
-            cstate.lget(local_to_retrieve)
-            ops.append(f"LGET_{local_to_retrieve}")
-            idx -= 1
-            local_to_retrieve = cstate.local_with_value(self._final_stack[idx])
-        return ops
-
-    def _isolated_instr(self, instr_id: id_T) -> bool:
-        """
-        Given an instruction that has some deps and can appear embedded in a term (probably, a load or get instruction),
-        checks it must be considered as a separate instruction to deal with.
-        """
-        # Access the successors it can be computed with
-        other_successors = set(self._dep_graph.successors(instr_id))
-        instr_successors = set(nx.nodes(nx.dfs_tree(self._instr_dep_graph, instr_id)))
-        # We need to remove the same vertex
-        instr_successors.remove(instr_id)
-        other_successors.difference_update(instr_successors)
-
-        if self.debug_mode:
-            print("---- Detect isolated instr ----")
-            for node_emb in instr_successors:
-                if 'call' in node_emb or 'store' in node_emb:
-                    for node_not in other_successors:
-                        print(node_not, node_emb, nx.has_path(self._dep_graph, node_not, node_emb))
-
-        # Condition: all maximal elements have some dependencies with another instruction
-        # which does not use the term directly
-        # TODO: improve condition
-        return all(any(nx.has_path(self._dep_graph, node_not, node_emb) for node_not in other_successors)
-                   for node_emb in instr_successors if 'call' in node_emb or 'store' in node_emb)
+        top_can_be_used[instr["id"]] = current_uses
+        return current_uses
 
     def _available_positions_stack(self, var_elem: var_T, cstate: SymbolicState) -> List[int]:
         """
@@ -453,53 +423,24 @@ class SMSgreedy:
         positions_locals = self._var2pos_locals[var_elem]
         return [x for x in positions_locals if cstate.locals[x] == var_elem or not cstate.liveness[x]]
 
-    def split_ids_into_categories(self) -> Tuple[Set[id_T], List[id_T], Set[id_T], Set[id_T]]:
+    def select_ops(self):
         """
-        Returns four sets of instruction ids: the ones that have some kind of dependency (mops), the ones that appear in
-        fstack with no dependency (sops), the maximal elements that appear in flocals with no dependencies (lops)
-        and the remaining ones (rops).
-        This is useful to choose with computation used.
+        Selects which operations are considered in the algorithm. We consider mem operations (excluding loads with no
+        dependencies) and computations that are not subterms
         """
-        # We filter those mops that appear as a subterm of another term
-        # TODO: Not consider load or get instructions if they can be computed when computing a superterm
-        mops = {instr["id"] for instr in self._user_instr if any(instr_name in instr["disasm"]
-                                                                 for instr_name in ["call", "store", "global", "load"])}
-        sops = [self._var2id[stack_var] for stack_var in self._final_stack
-                if stack_var in self._var2id and self._var2id[stack_var] not in mops and
-                self._dep_graph.out_degree(self._var2id[stack_var], 'weight') == 0 and not cheap(self._var2instr[stack_var])]
-        lops = {self._var2id[stack_var] for stack_var in self._final_locals
-                if stack_var in self._var2id and self._var2id[stack_var] not in mops and
-                self._dep_graph.out_degree(self._var2id[stack_var], 'weight') == 0 and not cheap(self._var2instr[stack_var])}
-        rops = set(self._id2instr.keys()).difference(mops.union(sops).union(lops))
-        print(mops, sops, lops, rops)
-        return mops, sops, lops, rops
 
-    def select_memory_ops_order(self, mops: Set[id_T]) -> List[id_T]:
-        """
-        Returns a compatible order w.r.t mops, considering the different dependencies that are formed both from
-        deps and due to subterms embedded into terms
-        """
-        # As the dependency relation among instructions is represented as a happens-before, we need to reverse the
-        # toposort to start with the deepest elementsh
-        topo_order = nx.topological_sort(self._trans_sub_graph)
-        # We must extract the order that only includes ids from mops
-        return [id_ for id_ in topo_order if id_ in mops]
+        relevant_operations = [instr["id"] for instr in self._user_instr if
+                               any(instr_name in instr["disasm"] for instr_name in ["call", "store", "global"])
+                               or ("load" in instr["disasm"] and all(instr["id"] != elem for dep in self._deps for elem in dep))
+                               or self._dep_graph.out_degree(instr["id"], 'weight') == 0]
+
+        return relevant_operations
 
     def var_must_be_moved(self, var_elem: var_T, cstate: SymbolicState) -> bool:
         """
-        By construction, a var element must be moved if it appears in no locals, unless it has one position tied which
-        corresponds to current top of the stack
+        By construction, a var element must be moved if it appears in a final local in which it must be stored
         """
-        positions_stack = self._var2pos_stack[var_elem]
-
-        local = cstate.local_with_value(var_elem)
-        instr = self._var2instr.get(var_elem, None)
-
-        # We don't need to move a var if it's already in locals and hence, they must satisfy that local == -1.
-        # Also, if the var corresponds to a cheap instruction or all occurrences of that var have been already computed
-        # and it must be at current position
-        return local == -1 and not (self._var_total_uses[var_elem] == cstate.var_uses[var_elem] and len(positions_stack) >= 1 and
-                                     idx_wrt_cstack(positions_stack[0], cstate.stack, self._final_stack) == 0) and not (instr is not None and cheap(instr))
+        return len(self._available_positions_locals(var_elem, cstate)) > 0
 
     def can_be_placed_in_position(self, var_elem: var_T, clocals: List[var_T], clocals_liveness: List[bool]) -> bool:
         """
@@ -510,34 +451,35 @@ class SMSgreedy:
                 return True
         return False
 
-    def move_top_to_position(self, var_elem: var_T, cstate: SymbolicState) -> List[id_T]:
+    def move_top_to_position(self, var_elem: var_T, cstate: SymbolicState, is_reused: bool) -> List[id_T]:
         """
-        Tries to store current element in all the positions in which it is available to be moved
+        Tries to store current element in all the positions in which it is available to be moved. It includes boolean
+        is_reused to determine whether we need the value afterwards
         """
         ops = []
         positions_available_locals = self._available_positions_locals(var_elem, cstate)
-        positions_available_stack = self._available_positions_stack(var_elem, cstate)
 
         if self.debug_mode:
             print('---- Move top to position ----')
             print(cstate)
             print("Positions locals:", positions_available_locals)
-            print("Positions stack:", positions_available_stack)
             print("")
 
         if len(positions_available_locals) == 0:
-            # No position is available yet, so we just store it one available local
-            y = cstate.available_local()
+            # We try to reuse an already declared local. Otherwise, we assign it to a new one
+            x = cstate.available_local()
 
-            if y == -1:
-                y = cstate.new_local()
+            if x == -1:
+                x = cstate.new_local()
 
-            cstate.lset(y, False)
-            ops.append(f"LSET_{y}")
+            # Checks if the value is reused and stores it in another position otherwise
+            if not is_reused:
+                cstate.lset(x, False)
+                ops.append(f"LSET_{x}")
+            else:
+                cstate.ltee(x, False)
+                ops.append(f"LTEE_{x}")
 
-            # If it needs to be stored somewhere in the stack, we perform that step at this point
-            if len(positions_available_stack) > 0:
-                self._place_stack_elem_in_position(cstate, positions_available_stack)
 
         else:
             # There is at least one local in fstate in which we can place the state. We first store the
@@ -551,26 +493,18 @@ class SMSgreedy:
 
             # Finally, we check whether the last store to local can be a ltee (if there is an element left to place in
             # the stack at the same position) or a lset
-            if len(positions_available_stack) == 1 and idx_wrt_cstack(positions_available_stack[0], cstate.stack,
-                                                                      self._final_stack) == 0:
-                local = positions_available_locals[i]
-                cstate.ltee(local, True)
-                ops.append(f"LTEE_{local}")
+            x = positions_available_locals[i]
+
+            if not is_reused:
+                cstate.lset(x, False)
+                ops.append(f"LSET_{x}")
             else:
-                y = cstate.available_local()
-
-                if y == -1:
-                    y = cstate.new_local()
-
-                cstate.lset(y, False)
-                ops.append(f"LSET_{y}")
-
-                if len(positions_available_stack) > 0:
-                    self._place_stack_elem_in_position(cstate, positions_available_stack)
+                cstate.ltee(x, False)
+                ops.append(f"LTEE_{x}")
 
         return ops
 
-    def choose_next_computation(self, cstate: SymbolicState, mops: List[id_T], sops: List[id_T], lops: Set[id_T]) -> Tuple[id_T, str]:
+    def choose_next_computation(self, cstate: SymbolicState, dep_graph) -> Tuple[id_T, str]:
         """
         Returns an element from mops, sops or lops and where it came from (mops, sops or lops)
         TODO: Here we should try to devise a good heuristics to select the terms
@@ -597,7 +531,7 @@ class SMSgreedy:
                 return top_id, 'cheap'
 
             # If it is cheap to compute or has no dependencies, we can choose it
-            elif self._trans_sub_graph.in_degree(top_id) == 0:
+            elif dep_graph.in_degree(top_id) == 0:
                 return top_id, 'sops'
 
         # To determine the best candidate, we annotate which element can solve the most number of locals for the same
@@ -607,7 +541,9 @@ class SMSgreedy:
 
         # First we try to assign an element from the list of final local values if it can be placed in all the gaps
         # We also determine the element which has more
-        for id_ in lops:
+        candidates = [id_ for id_ in dep_graph.nodes if dep_graph.in_degree(id_) == 0]
+
+        for id_ in candidates:
             top_instr = self._id2instr[id_]
 
             # TODO: future maybe allow choosing operations that had been already chosen to allow just computing them
@@ -635,12 +571,38 @@ class SMSgreedy:
             elif number_solved >= max_number_solved:
                 candidate = id_
 
-        # After that, we try to assign an element of mops (if there are any)
-        if len(mops) > 0:
-            return mops[0], 'mops'
+        if candidate is None:
+            candidate = candidates[0]
 
         # Finally, we just choose an element from locals that covers multiple gaps, which has been determined previously
         return candidate, 'lops'
+
+    def _access_stack_position(self, cstate: SymbolicState, position) -> List[id_T]:
+        """
+        Access the corresponding stack position by storing the intermediate elements either in locals or popping them
+        if not needed elsewhere
+        """
+        ops = []
+        for _ in range(position + 1):
+            ops.extend(self.move_top_to_position(cstate.top_stack(), cstate, False))
+        return ops
+
+    def store_needed_value(self, instr: instr_T, cstate: SymbolicState):
+        """
+        Checks if there is an element in the stack that must be used somewhere in the code. If so, stores all the
+        intermediate values in locals
+        """
+        # Check if there is an element in the stack that must be accessed
+        values_needed = [stack_var for stack_var in self._values_used[instr["id"]] if stack_var in cstate.stack]
+        topmost = cstate.top_stack()
+        ops = []
+        # If we can reuse the topmost value, we don't update anything
+        if len(values_needed) > 0 and (len(values_needed) != 1 or topmost not in self._top_can_be_used[instr["id"]]):
+
+            # We compute in which positions the element can be stored
+            positions = [cstate.stack.index(stack_var) for stack_var in self._values_used[instr["id"]] if stack_var in cstate.stack]
+            ops.extend(self._access_stack_position(cstate, max(positions)))
+        return ops
 
     def compute_var(self, var_elem: var_T, cstate: SymbolicState) -> List[id_T]:
         """
@@ -654,7 +616,7 @@ class SMSgreedy:
         # Finally, we need to decide if the element is stored in a local or not. If so, we apply
         # a ltee instruction to place it in the corresponding local. We only store an instruction
         # if it is not cheap and it must be placed in more places
-        if not cheap(instr) and cstate.var_uses[var_elem] < self._var_total_uses[var_elem]:
+        if cstate.var_uses[var_elem] < self._var_total_uses[var_elem]:
             avail_pos_locals = self._available_positions_locals(var_elem, cstate)
 
             # If there are more than one local in which the element is stored, we just do so
@@ -663,7 +625,9 @@ class SMSgreedy:
                     # We just apply as many tees as possible, so the element is placed in its position
                     cstate.ltee(x, True)
                     seq.append(f"LTEE_{x}")
-            else:
+
+            # Only store it in another local if it is not cheap
+            elif not cheap(instr):
                 # Otherwise, we assign a new local
                 x = cstate.available_local()
 
@@ -699,10 +663,16 @@ class SMSgreedy:
 
         for stack_var in input_vars:
             local = cstate.local_with_value(stack_var)
+            top_elem = cstate.top_stack()
             if local != -1:
                 # If it's already stored in a local, we just retrieve it
                 cstate.lget(local)
                 seq.append(f"LGET_{local}")
+            elif top_elem is not None and top_elem == stack_var:
+                # If it is the topmost element, we store it in a local if it is needed more than once and is not cheap
+                top_instr = self._var2instr.get(top_elem, None)
+                if top_instr is not None and not cheap(top_instr) and cstate.var_uses(top_elem) < self._var_total_uses(top_elem):
+                    self.move_top_to_position(top_elem, cstate, True)
             else:
                 # Otherwise, we must return generate it with a recursive call
                 seq.extend(self.compute_var(stack_var, cstate))
@@ -712,16 +682,72 @@ class SMSgreedy:
         seq.append(instr["id"])
         return seq
 
+    def deepest_misaligned_stack(self, cstate: SymbolicState):
+        """
+        Traverse the elements to detect which element from the bottom must be chosen to be stored
+        """
+        for i, (current_var, final_var) in enumerate(zip(reversed(cstate.stack), reversed(self._final_stack))):
+            if current_var != final_var:
+                return i
+        return len(self._final_stack)
+
     def solve_permutation(self, cstate: SymbolicState) -> List[id_T]:
         """
         After all terms have been computed, solve_permutation places all elements in their
         corresponding place.
         """
         optp = []
+
+        deepest = self.deepest_misaligned_stack(cstate)
+        if deepest is not None:
+            index_bottom = len(cstate.stack) - deepest - 1
+
+            # First we store the elements in-between in their corresponding position
+            optp.extend(self._access_stack_position(cstate, index_bottom))
+
         stack_idx = len(self._final_stack) - len(cstate.stack) - 1
 
         # First we solve the values in the stack
         while stack_idx >= 0:
+            final_element = self._final_stack[stack_idx]
+            # The corresponding value must be stored in some local register
+            x = cstate.local_with_value(final_element)
+
+            # Means this is a cheap instruction
+            if x == -1:
+                optp.extend(self.compute_instr(self._var2instr[final_element], cstate))
+            else:
+                cstate.lget(x)
+                optp.append(f"LGET_{x}")
+                stack_idx -= 1
+
+        # Then we detect which locals have a value that appears in flocals and load them onto the stack
+        outdated_locals = []
+        for local_idx in range(len(self._final_locals)):
+            if self._final_locals[local_idx] != cstate.locals[local_idx]:
+                x = cstate.local_with_value(self._final_locals[local_idx])
+                outdated_locals.append(local_idx)
+                cstate.lget(x)
+                optp.append(f"LGET_{x}")
+
+            local_idx += 1
+
+        # Finally, we store them in the corresponding local in reversed order
+        for x in reversed(outdated_locals):
+            cstate.lset(x, True)
+            optp.append(f"LSET_{x}")
+
+        return optp
+
+    def store_intermediate_locals(self, cstate: SymbolicState, position: int) -> List[id_T]:
+        """
+        Stores some elements in cstate stack in registers
+        """
+        optp = []
+
+        # We access the elements in the stack and store them in registers (trying the final ones)
+        for stack_idx in range(position):
+            cstate.available_local()
             # The corresponding value must be stored in some local register
             x = cstate.local_with_value(self._final_stack[stack_idx])
 
@@ -743,27 +769,10 @@ class SMSgreedy:
 
             local_idx += 1
 
-        # Finally, we store them in the corresponding local in reversed order
-        for x in reversed(outdated_locals):
-            cstate.lset(x, True)
-            optp.append(f"LSET_{x}")
-
-        return optp
-
-    def _debug_initial(self, mops: List[id_T], lops: Set[id_T], sops: List[id_T]):
+    def _debug_initial(self, ops: List[id_T]):
         if self.debug_mode:
             print("---- Initial Ops ----")
-            print('Mops:', mops)
-            print('Lops:', lops)
-            print('Sops:', sops)
-            print("")
-
-    def _debug_loop(self, cstate: SymbolicState, optg: List[id_T], mops: List[id_T], sops: List[id_T], lops: List[id_T]):
-        if self.debug_mode:
-            print("---- While loop ----")
-            print("Ids", optg)
-            print('Ops', mops, sops, lops)
-            print('State', cstate)
+            print('Ops:', ops)
             print("")
 
     def _debug_drop(self, var_top: var_T, cstate: SymbolicState):
@@ -780,21 +789,44 @@ class SMSgreedy:
             print(cstate)
             print("")
 
+    def _debug_loop(self, dep_graph, optg: List[id_T], cstate: SymbolicState):
+        if self.debug_mode:
+            print("---- While loop ----")
+            print("Ops not computed", dep_graph.nodes)
+            print("Ops computed", optg)
+            print(cstate)
+            print("")
+
+    def _debug_compute_instr(self, id_: id_T, ops: List[id_T]):
+        if self.debug_mode:
+            print("---- Compute instr ----")
+            print("Id", id_)
+            print("Used ops", ops)
+            print("")
+
+    def _debug_store_intermediate(self, id_: id_T, ops: List[id_T]):
+        if self.debug_mode:
+            print("---- Store intermediate ----")
+            print("Id", id_)
+            print("Used ops", ops)
+            print("")
+
     def greedy(self) -> List[id_T]:
         cstate: SymbolicState = SymbolicState(self._initial_stack.copy(), self._initial_locals.copy(),
                                               self._var_total_uses, self.debug_mode)
 
         # We split into three sets: mops (operations with dependencies), sops (elements that appear in fstack
         # that do not appear in mops) and rops (other operations with no restrictions)
-        mops_unsorted, sops, lops = self._mops.copy(), self._sops.copy(), self._lops.copy()
-        mops: List[id_T] = self.select_memory_ops_order(mops_unsorted)
-        optg: List[id_T] = []
+        dep_graph = self._trans_sub_graph.copy()
+        optg = []
 
-        self._debug_initial(mops, lops, sops)
+        self._debug_initial(dep_graph.nodes)
 
         # For easier code, we end the while when we need to choose an operation and there are no operations left
         while True:
             var_top = cstate.top_stack()
+
+            self._debug_loop(dep_graph, optg, cstate)
 
             # Top of the stack must be removed, as it appears more time it is being used
             if var_top is not None and cstate.var_uses[var_top] > self._var_total_uses[var_top]:
@@ -805,17 +837,17 @@ class SMSgreedy:
 
             # Top of the stack must be placed in some other position
             elif var_top is not None and self.var_must_be_moved(var_top, cstate):
-                optg.extend(self.move_top_to_position(var_top, cstate))
+                optg.extend(self.move_top_to_position(var_top, cstate, False))
 
             # Top of the stack cannot be moved to the corresponding position. As there is always the possibility
             # of storing in locals, this means that either the stack is empty or the current top of the stack
             # is already placed in the corresponding position. Hence, we just generate the following computation
             else:
                 # There are no operations left to choose, so we stop the search
-                if len(mops) + len(sops) + len(lops) == 0:
+                if len(dep_graph.nodes) == 0:
                     break
 
-                next_id, location = self.choose_next_computation(cstate, mops, sops, lops)
+                next_id, location = self.choose_next_computation(cstate, dep_graph)
                 self._debug_choose_computation(next_id, location, cstate)
 
                 # It is already stored in a local
@@ -828,15 +860,15 @@ class SMSgreedy:
                     # Cheap instructions are just computed, there is no need to erase elements from the lists
                     ops = self.compute_instr(self._id2instr[next_id], cstate)
                 else:
-                    remove_computation(next_id, location, mops, sops, lops)
-                    ops = self.compute_instr(self._id2instr[next_id], cstate)
+                    next_instr = self._id2instr[next_id]
+                    # After choosing a value that must be computed, we store intermediate values that are used in locals
+                    ops = self.store_needed_value(next_instr, cstate)
+                    self._debug_store_intermediate(next_id, ops)
 
-                    # Remove possible computations from mops that have been computed as part of the process
-                    while len(mops) > 0 and mops[0] in ops:
-                        remove_computation(mops[0], 'mops', mops, sops, lops)
-                        self._trans_sub_graph.remove_node(mops[0])
-
-                    self._trans_sub_graph.remove_node(next_id)
+                    other_ops = self.compute_instr(next_instr, cstate)
+                    self._debug_compute_instr(next_id, other_ops)
+                    ops.extend(other_ops)
+                    dep_graph.remove_node(next_id)
 
                 optg.extend(ops)
 
