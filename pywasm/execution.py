@@ -769,7 +769,7 @@ class AbstractConfiguration:
 
     def initialize_store(self):
         self.global_count = 1
-        self.store = copy.deepcopy(self.initial_store)
+        self.store = self.initial_store
 
         # Change store global values by generic values
         # Non-mutable values remain the same as initially
