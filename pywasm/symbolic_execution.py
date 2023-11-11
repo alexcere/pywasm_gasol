@@ -3,6 +3,7 @@ import json
 from typing import List, Dict, Set, Tuple, Any
 import re
 import sys
+from . import global_params
 
 id_T = str
 var_T = str
@@ -174,6 +175,9 @@ def check_deps(instr_ids: List[id_T], dependencies: List[Tuple[id_T, id_T]]) -> 
     pos_by_id = collections.defaultdict(lambda: [])
     for i, instr in enumerate(instr_ids):
         pos_by_id[instr].append(i)
+    if global_params.DEBUG_MODE:
+        for dep in dependencies:
+            print(dep, max(pos_by_id[dep[0]]) < min(pos_by_id[dep[1]]))
     return all(max(pos_by_id[dep[0]]) < min(pos_by_id[dep[1]]) for dep in dependencies)
 
 
