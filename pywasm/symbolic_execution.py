@@ -1,3 +1,4 @@
+import collections
 import json
 from typing import List, Dict, Set, Tuple, Any
 import re
@@ -170,9 +171,10 @@ def check_deps(instr_ids: List[id_T], dependencies: List[Tuple[id_T, id_T]]) -> 
     """
     Check the ids from the final instructions satisfy the dependencies
     """
-    for dep in dependencies:
-        print(dep, instr_ids.index(dep[0]) < instr_ids.index(dep[1]))
-    return all(instr_ids.index(dep[0]) < instr_ids.index(dep[1]) for dep in dependencies)
+    pos_by_id = collections.defaultdict(lambda: [])
+    for i, instr in enumerate(instr_ids):
+        pos_by_id[instr].append(i)
+    return all(max(pos_by_id[dep[0]]) < min(pos_by_id[dep[1]]) for dep in dependencies)
 
 
 def ensure_ids_are_unique(user_instr: List[instr_T]) -> bool:
@@ -269,7 +271,7 @@ def check_execution_from_ids(sfs: Dict, instr_ids: List[id_T]) -> bool:
     assert clocals_list[:len(flocal_list)] == flocal_list, 'Ids - Locals do not match'
     assert check_deps(instr_ids, dependencies), 'Dependencies are not coherent'
     for instr in user_instr:
-        if any(instr_name in instr["disasm"] for instr_name in ["call", "global", "load", "store"]):
+        if any(instr_name in instr["disasm"] for instr_name in ["call", "global.set", "store", "memory"]):
             assert instr_ids.count(instr["id"]) == 1, "Mem operation used more than once"
 
     return True
