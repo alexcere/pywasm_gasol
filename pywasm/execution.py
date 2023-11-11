@@ -3129,17 +3129,17 @@ def symbolic_execution_from_instrs(instrs: typing.List[binary.Instruction],
 
 def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int, original_instrs: typing.List[str],
                        rules: str):
-    final_block, outcome, solver_time = superoptimizer.evmx_to_pywasm(sfs, tout, SimpleNamespace(config_sat=global_params.CONFIG_SAT, external=global_params.EXTERNAL_SOLVER))
+    final_block, outcome, solver_time, is_correct = superoptimizer.evmx_to_pywasm(sfs, tout, SimpleNamespace(config_sat=global_params.CONFIG_SAT, external=global_params.EXTERNAL_SOLVER))
     csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
                                                        solver_time, 10, len(original_instrs),
-                                                       sfs["init_progr_len"], block_name, rules)
+                                                       sfs["init_progr_len"], block_name, rules, is_correct)
     return csv_info
 
 
 def greedy_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int, original_instrs: typing.List[str],
                        rules: str):
-    final_block, outcome, solver_time = superoptimizer.greedy_to_pywasm(sfs, tout, None)
+    final_block, outcome, solver_time, is_correct = superoptimizer.greedy_to_pywasm(sfs, tout, None)
     csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
                                                        solver_time, 10, len(original_instrs),
-                                                       sfs["init_progr_len"], block_name, rules)
+                                                       sfs["init_progr_len"], block_name, rules, is_correct)
     return csv_info

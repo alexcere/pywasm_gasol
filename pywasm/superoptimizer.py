@@ -71,54 +71,55 @@ def id2disasm(instr_id: str, user_instrs: Dict[str, Dict[str, Any]], ini_locals:
         return user_instr["disasm"]
 
 
-def evmx_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], str, float]:
+def evmx_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], str, float, bool]:
     # There was an error when initializing the optimizer
     id_seq, optimization_outcome, time = evmx_from_sms(sfs, timeout, parsed_args, "wasm")
     instr_id_to_instr = {instr['id']: instr for instr in sfs['user_instrs']}
     ini_locals = [local_repr[0] for local_repr in sfs["register_changes"]]
+    if 'optimal' in optimization_outcome:
+        is_correct = symbolic_execution.check_execution_from_ids(sfs, [instr_id for instr_id in id_seq if instr_id != "NOP"])
+    else:
+        is_correct = True
+
     if global_params.DEBUG_MODE:
         print("Id seq:", id_seq)
-        if 'optimal' in optimization_outcome:
-            print("Checking...")
-            print(symbolic_execution.check_execution_from_ids(sfs, [instr_id for instr_id in id_seq if instr_id != "NOP"]))
     return ([id2disasm(instr_id, instr_id_to_instr, ini_locals) for instr_id in id_seq if instr_id != "NOP"],
-            optimization_outcome, time)
+            optimization_outcome, time, is_correct)
 
 
-def greedy_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], str, float]:
+def greedy_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str], str, float, bool]:
     usage_start = resource.getrusage(resource.RUSAGE_SELF)
     try:
         id_seq = greedy.algorithm.SMSgreedy(sfs, global_params.DEBUG_MODE).greedy()
         usage_stop = resource.getrusage(resource.RUSAGE_SELF)
         optimization_outcome = "non_optimal"
+        is_correct = symbolic_execution.check_execution_from_ids(sfs, [instr_id for instr_id in id_seq if instr_id != "NOP"])
 
         if global_params.DEBUG_MODE:
             print("Id seq:", id_seq)
-            if 'optimal' in optimization_outcome:
-                print("Checking...")
-                print(symbolic_execution.check_execution_from_ids(sfs, [instr_id for instr_id in id_seq if
-                                                                        instr_id != "NOP"]))
     except:
         usage_stop = resource.getrusage(resource.RUSAGE_SELF)
         print("EXEC", sfs["block"])
         traceback.print_exc()
         id_seq = []
         optimization_outcome = "error"
+        # We assume if there is an exception, then it is incorrect
+        is_correct = False
 
     instr_id_to_instr = {instr['id']: instr for instr in sfs['user_instrs']}
     ini_locals = [local_repr[0] for local_repr in sfs["register_changes"]]
     return ([id2disasm(instr_id, instr_id_to_instr, ini_locals) for instr_id in id_seq if instr_id != "NOP"],
-            optimization_outcome, usage_stop.ru_utime + usage_stop.ru_stime - usage_start.ru_utime - usage_start.ru_stime)
-
+            optimization_outcome, usage_stop.ru_utime + usage_stop.ru_stime - usage_start.ru_utime - usage_start.ru_stime, is_correct)
 
 
 def generate_statistics_info(original_block: List[str], optimized_block: List[str], outcome: str, solver_time: float,
-                             tout: int, initial_bound: int, used_bound: int, block_name: str, rules_repr: str) -> Dict:
+                             tout: int, initial_bound: int, used_bound: int, block_name: str,
+                             rules_repr: str, is_correct: bool) -> Dict:
 
     statistics_row = {"block_id": block_name,  "previous_solution": ' '.join(original_block), "timeout": tout,
                       "solver_time_in_sec": round(solver_time, 3), "outcome": outcome,
                       "initial_n_instrs": initial_bound, "model_found": False, "shown_optimal": False,
-                      "initial_length": len(original_block), "used_bound": used_bound, "saved_length": 0}
+                      "initial_length": len(original_block), "used_bound": used_bound, "saved_length": 0, "checker": is_correct}
 
     # The solver has returned a valid model
     if outcome in ["optimal", "non_optimal"]:
