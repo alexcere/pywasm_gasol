@@ -640,9 +640,10 @@ class SMSgreedy:
             topmost_element = cstate.top_stack()
             first_arg_instr = self._var2instr.get(instr['inpt_sk'][0], None)
 
-            # Condition: the topmost element can be reused by the first argument instruction
+            # Condition: the topmost element can be reused by the first argument instruction or is the first argument
             if (topmost_element is not None and topmost_element in self._top_can_be_used[instr["id"]] and
-                    first_arg_instr is not None and topmost_element in self._top_can_be_used[first_arg_instr["id"]]):
+                    first_arg_instr is not None and
+                    (first_arg_instr["outpt_sk"][0] == topmost_element or topmost_element in self._top_can_be_used[first_arg_instr["id"]])):
                 input_vars = instr['inpt_sk']
             else:
                 input_vars = list(reversed(instr['inpt_sk']))
