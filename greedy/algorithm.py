@@ -45,7 +45,7 @@ def cheap(instr: instr_T) -> bool:
     """
     Cheap computations are those who take one instruction (i.e. inpt_sk is empty)
     """
-    return len(instr['inpt_sk']) == 0 and all(instr_name not in instr["disasm"] for instr_name in ["call", "load", "global.store"])
+    return len(instr['inpt_sk']) == 0 and all(instr_name not in instr["disasm"] for instr_name in ["call", "load", "memory", "global.store"])
 
 
 @unique
@@ -267,14 +267,14 @@ class SMSgreedy:
         for node in self._relevant_ops:
             self._trans_sub_graph.add_node(node)
 
-        with open('combined.dot', 'w') as f:
-            nx.nx_pydot.write_dot(self._trans_sub_graph, f)
-
-        with open('direct.dot', 'w') as f:
-            nx.nx_pydot.write_dot(self._direct_g, f)
-
-        with open('indirect.dot', 'w') as f:
-            nx.nx_pydot.write_dot(self._indirect_g, f)
+        # with open('combined.dot', 'w') as f:
+        #     nx.nx_pydot.write_dot(self._trans_sub_graph, f)
+        #
+        # with open('direct.dot', 'w') as f:
+        #     nx.nx_pydot.write_dot(self._direct_g, f)
+        #
+        # with open('indirect.dot', 'w') as f:
+        #     nx.nx_pydot.write_dot(self._indirect_g, f)
 
 
     def _compute_var_total_uses(self) -> Dict[var_T, int]:
@@ -420,7 +420,7 @@ class SMSgreedy:
         dep_ids = set(elem for dep in self._deps for elem in dep)
         # print(*(instr["disasm"] for instr in self._user_instr))
         relevant_operations = [instr["id"] for instr in self._user_instr if
-                               any(instr_name in instr["disasm"] for instr_name in ["call", "store", "global"])
+                               any(instr_name in instr["disasm"] for instr_name in ["call", "store", "global", "memory"])
                                or ("load" in instr["disasm"] and instr["id"] in dep_ids)
                                or direct_g.out_degree(instr["id"], 'weight') == 0]
         return relevant_operations
