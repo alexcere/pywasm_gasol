@@ -849,7 +849,7 @@ class AbstractConfiguration:
             initial_block = [instr for instr in block if
                              instr.opcode not in instruction.beginning_basic_block_instrs and
                              instr.opcode not in instruction.end_basic_block_instrs]
-            if 1000 > len(initial_block) > 4:
+            if len(initial_block) > 0:
                 print(f"Analyzing block {i}")
                 initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                                  instr.opcode not in instruction.end_basic_block_instrs]
@@ -932,15 +932,22 @@ class AbstractConfiguration:
                                                                                              json_sat["dependencies"])
         json_sat["non_immediate_dependencies"] = forbidden_immediate_dependencies
         store_json(json_sat, block_name)
-        if global_params.OPTIMIZER == "greedy":
-            csv_info = greedy_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block],
+
+        tout = min(140, 10*(1+ sum(1 if instr["storage"] else 0 for instr in json_sat["user_instrs"])))
+        if global_params.UB_GREEDY:
+            csv_info = superopt_and_greedy_from_json(json_sat, block_name, tout,
+                                                     [str(instr) for instr in basic_block], rules_repr)
+
+        elif global_params.OPTIMIZER == "greedy":
+            csv_info = greedy_from_json(json_sat, block_name, tout, [str(instr) for instr in basic_block],
                                         rules_repr)
         else:
-            csv_info = superopt_from_json(json_sat, block_name, 2*len(basic_block), [str(instr) for instr in basic_block],
+            csv_info = superopt_from_json(json_sat, block_name, tout, [str(instr) for instr in basic_block],
                                           rules_repr)
         if global_params.DEBUG_MODE:
+            pass
             # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
-            assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
+            # assert all(item in json_sat.items() for item in json_initial.items()), 'Sfs extended has modified a field in the sfs'
         # dataflow_dot.generate_CFG_dot(json_sat, global_params.FINAL_FOLDER.joinpath(f"{block_name}.dot"))
         return csv_info
 
@@ -3132,7 +3139,7 @@ def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout:
     final_block, outcome, solver_time, is_correct = superoptimizer.evmx_to_pywasm(sfs, tout, SimpleNamespace(config_sat=global_params.CONFIG_SAT, external=global_params.EXTERNAL_SOLVER))
     csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
                                                        solver_time, 10, len(original_instrs),
-                                                       sfs["init_progr_len"], block_name, rules, is_correct)
+                                                       sfs["init_progr_len"], block_name, rules, is_correct, "sat")
     return csv_info
 
 
@@ -3141,5 +3148,27 @@ def greedy_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: i
     final_block, outcome, solver_time, is_correct = superoptimizer.greedy_to_pywasm(sfs, tout, None)
     csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
                                                        solver_time, 10, len(original_instrs),
-                                                       sfs["init_progr_len"], block_name, rules, is_correct)
+                                                       sfs["init_progr_len"], block_name, rules, is_correct, "greedy")
+    return csv_info
+
+
+def superopt_and_greedy_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int,
+                                  original_instrs: typing.List[str], rules: str):
+    final_block_greedy, outcome_greedy, _, is_correct = superoptimizer.greedy_to_pywasm(sfs, tout, None)
+    # If it returns a valid solution, modify the field init_progr_len to enable the best bound
+    if is_correct:
+        sfs["init_progr_len"] = min(sfs["init_progr_len"], len(final_block_greedy))
+    final_block_sat, outcome_sat, solver_time, is_correct = superoptimizer.evmx_to_pywasm(sfs, tout, SimpleNamespace(config_sat=global_params.CONFIG_SAT, external=global_params.EXTERNAL_SOLVER))
+
+    if "optimal" in outcome_sat and len(final_block_sat) <= len(final_block_greedy):
+        chosen_solution = "tie" if len(final_block_greedy) == len(final_block_sat) else "sat"
+        csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block_sat, outcome_sat,
+                                                           solver_time, tout, len(original_instrs),
+                                                           sfs["init_progr_len"], block_name, rules, is_correct, chosen_solution)
+
+    else:
+        csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block_greedy, outcome_sat,
+                                                           solver_time, tout, len(original_instrs),
+                                                           sfs["init_progr_len"], block_name, rules, is_correct, "greedy")
+
     return csv_info

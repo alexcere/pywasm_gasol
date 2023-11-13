@@ -114,21 +114,22 @@ def greedy_to_pywasm(sfs: Dict, timeout: float, parsed_args) -> Tuple[List[str],
 
 def generate_statistics_info(original_block: List[str], optimized_block: List[str], outcome: str, solver_time: float,
                              tout: int, initial_bound: int, used_bound: int, block_name: str,
-                             rules_repr: str, is_correct: bool) -> Dict:
+                             rules_repr: str, is_correct: bool, final_solution_tag: str) -> Dict:
 
     statistics_row = {"block_id": block_name,  "previous_solution": ' '.join(original_block), "timeout": tout,
                       "solver_time_in_sec": round(solver_time, 3), "outcome": outcome,
                       "initial_n_instrs": initial_bound, "model_found": False, "shown_optimal": False,
-                      "initial_length": len(original_block), "used_bound": used_bound, "saved_length": 0, "checker": is_correct}
+                      "initial_length": len(original_block), "used_bound": used_bound, "saved_length": 0,
+                      "checker": is_correct, "final_solution_tag": final_solution_tag}
 
     # The solver has returned a valid model
-    if outcome in ["optimal", "non_optimal"]:
+    if outcome in ["optimal", "non_optimal"] or final_solution_tag == "greedy":
         shown_optimal = outcome == "optimal"
 
         statistics_row.update({"model_found": True, "shown_optimal": shown_optimal,
                                "solution_found": ' '.join(optimized_block),
                                "optimized_n_instrs": len(optimized_block), 'optimized_length': len(optimized_block),
-                               'outcome': 'model', 'saved_length': len(original_block) - len(optimized_block),
+                               'saved_length': len(original_block) - len(optimized_block),
                                "rules": rules_repr})
 
     return statistics_row
