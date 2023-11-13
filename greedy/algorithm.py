@@ -343,6 +343,8 @@ class SMSgreedy:
                 # Add only instructions that are relevant to our context
                 if instr_bef_id in relevant_ops:
                     current_uses.add(stack_var)
+            else:
+                current_uses.add(stack_var)
         value_uses[instr["id"]] = current_uses
         return current_uses
 
