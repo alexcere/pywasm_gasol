@@ -18,3 +18,7 @@ def split_instructions(initial_block: List[Instruction], n_instructions: int) ->
     if i < len(initial_block):
         blocks.append(initial_block[i:len(initial_block)])
     return blocks
+
+
+def split_simple(initial_block: List[Instruction], n_instructions: int) -> List[List[Instruction]]:
+    return [initial_block[i:i + n_instructions] for i in range(0, len(initial_block), n_instructions)]

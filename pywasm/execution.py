@@ -832,34 +832,37 @@ class AbstractConfiguration:
             raise Exception(f'pywasm_gasol: host function not allowed to be executed')
         raise Exception(f'pywasm: unknown function type: {function}')
 
+    def initialize_frame(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value]):
+        local_list = [Value.new(convention.symbolic, f"local_{i}") for i in
+                      range(len(function_args) + len(function.code.local_list))]
+        frame = Frame(
+            module=function.module,
+            local_list=local_list,
+            expr=function.code.expr,
+            arity=len(function.type.rets.data),
+        )
+        self.set_frame(frame)
+
     def exec_symbolic(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value], func_address: int):
 
         blocks = binary.Expression.blocks_from_instructions(self.frame.expr.data)
         csv_rows = []
         for i, block in enumerate(blocks):
             # Group function args and local list as a single list of "local_{i}" symbolic values
-            local_list = [Value.new(convention.symbolic, f"local_{i}") for i in range(len(function_args) + len(function.code.local_list))]
-            frame = Frame(
-                module=function.module,
-                local_list=local_list,
-                expr=function.code.expr,
-                arity=len(function.type.rets.data),
-            )
-            self.set_frame(frame)
             # Only consider initial blocks with at least one instruction
             initial_block = [instr for instr in block if
                              instr.opcode not in instruction.beginning_basic_block_instrs and
                              instr.opcode not in instruction.end_basic_block_instrs]
-            if len(initial_block) > 0:
+            if len(initial_block) > 4:
                 initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                                  instr.opcode not in instruction.end_basic_block_instrs]
                 if global_params.SPLIT_BLOCK:
-                    blocks_split = split_blocks.split_instructions(initial_block, 50)
+                    blocks_split = split_blocks.split_simple(initial_block, 60)
                 else:
-                    blocks_split = initial_block
-                print(sum(len(subblock) for subblock in blocks_split), len(initial_block))
+                    blocks_split = [initial_block]
                 assert sum(len(subblock) for subblock in blocks_split) == len(initial_block)
                 for j, block_split in enumerate(blocks_split):
+                    self.initialize_frame(function, function_args)
                     if len(blocks_split) == 1:
                         name = f"function_{func_address}_block_{i}"
                     else:
