@@ -20,6 +20,7 @@ from . import dependencies
 from . import symbolic_execution
 from . import superoptimizer
 from . import simplification_rules
+from . import split_blocks
 import greedy
 
 
@@ -850,12 +851,22 @@ class AbstractConfiguration:
                              instr.opcode not in instruction.beginning_basic_block_instrs and
                              instr.opcode not in instruction.end_basic_block_instrs]
             if len(initial_block) > 0:
-                print(f"Analyzing block {i}")
                 initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                                  instr.opcode not in instruction.end_basic_block_instrs]
-                csv_row = self.exec_symbolic_block(initial_block, f"function_{func_address}_block_{i}")
-                if csv_row is not None:
-                    csv_rows.append(csv_row)
+                if global_params.SPLIT_BLOCK:
+                    blocks_split = split_blocks.split_instructions(initial_block, 50)
+                else:
+                    blocks_split = initial_block
+                print(sum(len(subblock) for subblock in blocks_split), len(initial_block))
+                assert sum(len(subblock) for subblock in blocks_split) == len(initial_block)
+                for j, block_split in enumerate(blocks_split):
+                    if len(blocks_split) == 1:
+                        name = f"function_{func_address}_block_{i}"
+                    else:
+                        name = f"function_{func_address}_block_{i}_{j}"
+                    csv_row = self.exec_symbolic_block(block_split, name)
+                    if csv_row is not None:
+                        csv_rows.append(csv_row)
         return csv_rows, len(self.frame.expr.data)
 
     def print_block(self, stack, memory_accesses, var_accesses, call_accesses):
@@ -933,7 +944,7 @@ class AbstractConfiguration:
         json_sat["non_immediate_dependencies"] = forbidden_immediate_dependencies
         store_json(json_sat, block_name)
 
-        tout = min(140, 10*(1+ sum(1 if instr["storage"] else 0 for instr in json_sat["user_instrs"])))
+        tout = min(300, 10*(1+ sum(1 if instr["storage"] else 0 for instr in json_sat["user_instrs"])))
         if global_params.UB_GREEDY:
             csv_info = superopt_and_greedy_from_json(json_sat, block_name, tout,
                                                      [str(instr) for instr in basic_block], rules_repr)
