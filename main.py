@@ -32,7 +32,7 @@ def parse_args() -> Namespace:
     group_opt.add_argument('-g', '--greedy', help='Enable greedy alone', action='store_true',
                            dest='greedy')
     group_opt.add_argument('-ub', '--ub-greedy', help='Enable using the bound from the greedy algorithm in '
-                                                      'the optimization process', action='store', dest='ub_greedy')
+                                                      'the optimization process', action='store_true', dest='ub_greedy')
 
     sat_options = ap.add_argument_group('SAT Options', 'Options for enabling flags in SAT')
     sat_options.add_argument('-sat-d', '--sat-dominance', action='store', dest='config_sat',
@@ -62,6 +62,7 @@ def initialize(arguments: Namespace) -> None:
     pywasm.global_params.DEBUG_MODE = arguments.debug_mode
     pywasm.global_params.CONFIG_SAT = arguments.config_sat
     pywasm.global_params.EXTERNAL_SOLVER = arguments.external
+    pywasm.global_params.UB_GREEDY = arguments.ub_greedy
 
 
 if __name__ == "__main__":

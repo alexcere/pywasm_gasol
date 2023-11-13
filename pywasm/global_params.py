@@ -8,3 +8,4 @@ GREEDY_BOUND: bool = True
 ISOLATED_NAME: str = "isolated"
 CONFIG_SAT: str = "all"
 EXTERNAL_SOLVER: bool = False
+UB_GREEDY: bool = False
