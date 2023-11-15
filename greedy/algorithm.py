@@ -526,7 +526,7 @@ class SMSgreedy:
                     dep_graph.remove_node(candidate)
                     self._indirect_g.remove_node(candidate)
                     self._direct_g.remove_node(candidate)
-                    print(f"Using {out_node} instead of {candidate}")
+                    # print(f"Using {out_node} instead of {candidate}")
                     return out_node, 'lops'
 
         for id_ in candidates:
