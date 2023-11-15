@@ -948,7 +948,6 @@ class AbstractConfiguration:
                                                                                              json_sat["dependencies"])
         json_sat["non_immediate_dependencies"] = forbidden_immediate_dependencies
         store_json(json_sat, block_name)
-
         tout = 1 # min(300, 10*(1+ sum(1 if instr["storage"] else 0 for instr in json_sat["user_instrs"])))
         if global_params.UB_GREEDY:
             csv_info = superopt_and_greedy_from_json(json_sat, block_name, tout,
@@ -957,6 +956,10 @@ class AbstractConfiguration:
         elif global_params.OPTIMIZER == "greedy":
             csv_info = greedy_from_json(json_sat, block_name, tout, [str(instr) for instr in basic_block],
                                         rules_repr)
+        elif global_params.UB_SFS:
+            csv_info = {}
+            modify_bound(json_sat, tout)
+            store_json(json_sat, block_name)
         else:
             csv_info = superopt_from_json(json_sat, block_name, tout, [str(instr) for instr in basic_block],
                                           rules_repr)
@@ -3160,7 +3163,7 @@ def superopt_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout:
 
 
 def greedy_from_json(sfs: typing.Dict[str, typing.Any], block_name: str, tout: int, original_instrs: typing.List[str],
-                       rules: str):
+                     rules: str):
     final_block, outcome, solver_time, is_correct = superoptimizer.greedy_to_pywasm(sfs, tout, None)
     csv_info = superoptimizer.generate_statistics_info(original_instrs, final_block, outcome,
                                                        solver_time, 10, len(original_instrs),
@@ -3188,3 +3191,11 @@ def superopt_and_greedy_from_json(sfs: typing.Dict[str, typing.Any], block_name:
                                                            sfs["init_progr_len"], block_name, rules, is_correct, "greedy")
 
     return csv_info
+
+
+def modify_bound(sfs: typing.Dict[str, typing.Any], tout: int):
+    final_block_greedy, outcome_greedy, _, is_correct = superoptimizer.greedy_to_pywasm(sfs, tout, None)
+    print(is_correct)
+    # If it returns a valid solution, modify the field init_progr_len to enable the best bound
+    if is_correct:
+        sfs["init_progr_len"] = min(sfs["init_progr_len"], len(final_block_greedy))

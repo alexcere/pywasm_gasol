@@ -10,3 +10,5 @@ CONFIG_SAT: str = "all"
 EXTERNAL_SOLVER: bool = False
 UB_GREEDY: bool = False
 SPLIT_BLOCK: bool = False
+UB_SFS: bool = False
+

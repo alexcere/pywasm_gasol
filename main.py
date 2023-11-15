@@ -29,11 +29,15 @@ def parse_args() -> Namespace:
     optimization_options = ap.add_argument_group('Optimization options')
     group_opt = input_options.add_mutually_exclusive_group()
 
-    optimization_options.add_argument('-g', '--greedy', help='Enable greedy alone', action='store_true',
+    group_opt.add_argument('-g', '--greedy', help='Enable greedy alone', action='store_true',
                            dest='greedy')
-    optimization_options.add_argument('-ub', '--ub-greedy', help='Enable using the bound from the greedy algorithm in '
+    group_opt.add_argument('-ub', '--ub-greedy', help='Enable using the bound from the greedy algorithm in '
                                                       'the optimization process', action='store_true', dest='ub_greedy')
-    optimization_options.add_argument('-sp', '--split', help='Enable blocks split', action='store_true', dest='split')
+    group_opt.add_argument('-usfs', '--ub-sfs', help='Compute an upper bound using the greedy algorithm and'
+                                                     'stores the corresponding JSON file', action='store_true', dest='ub_sfs')
+
+    optimization_options.add_argument('-sp', '--split', help='Enable blocks split',
+                                      action='store_true', dest='split')
 
     sat_options = ap.add_argument_group('SAT Options', 'Options for enabling flags in SAT')
     sat_options.add_argument('-sat-d', '--sat-dominance', action='store', dest='config_sat',
@@ -65,6 +69,7 @@ def initialize(arguments: Namespace) -> None:
     pywasm.global_params.EXTERNAL_SOLVER = arguments.external
     pywasm.global_params.UB_GREEDY = arguments.ub_greedy
     pywasm.global_params.SPLIT_BLOCK = arguments.split
+    pywasm.global_params.UB_SFS = arguments.ub_sfs
 
 
 if __name__ == "__main__":
