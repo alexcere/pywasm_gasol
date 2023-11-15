@@ -14,6 +14,7 @@ from . import validation
 from . import symbolic_execution
 from . import global_params
 from . import simplification_rules
+from . import split_blocks
 
 
 class Runtime:

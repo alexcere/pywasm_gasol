@@ -1,9 +1,7 @@
-import collections
 import json
 from typing import List, Dict, Set, Tuple, Any
 import re
 import sys
-from . import global_params
 
 id_T = str
 var_T = str
@@ -16,6 +14,9 @@ access_re = re.compile('_index\((.*)\)')
 def idx_from_access(access: str) -> int:
     return int(re.search(access_re, access).group(1))
 
+
+def instr_id_to_repr(instr_id, i) -> str:
+    pass
 
 def execute_instr(instr_name: str, pos: int, cstack: List[var_T], clocals: Dict[var_T, var_T], ilocals: List[var_T],
                   vars_: Set[var_T], user_instr: List[instr_T]) -> id_T:
@@ -114,20 +115,22 @@ def extract_idx_from_id(instr_id: str) -> int:
     return int(instr_id.split('_')[-1])
 
 
-def execute_instr_id(instr_id: str, cstack: List[var_T], clocals: List[var_T], user_instr: List[instr_T]):
+def execute_instr_id(instr_id: str, i: int, cstack: List[var_T], clocals: List[var_T], user_instr: List[instr_T],
+                     accesses: List[str]):
     """
     Executes the instr id according to user_instr
     """
     # Drop the value
     if instr_id == 'POP':
         cstack.pop(0)
+        return 'POP'
 
     # load.get: get the value from the corresponding local
     elif 'LGET' in instr_id:
         idx = extract_idx_from_id(instr_id)
         local_val = clocals[idx]
         cstack.insert(0, local_val)
-
+        return f'\GET{{{idx}}}'
     # load.set: store the value in the corresponding local
     elif 'LSET' in instr_id:
         idx = extract_idx_from_id(instr_id)
@@ -136,6 +139,8 @@ def execute_instr_id(instr_id: str, cstack: List[var_T], clocals: List[var_T], u
             clocals.append('')
 
         clocals[idx] = cstack.pop(0)
+        return f'\SET{{{idx}}}'
+
 
     # load.tee: store the value in the corresponding local without consuming the top of the stack
     elif 'LTEE' in instr_id:
@@ -145,69 +150,60 @@ def execute_instr_id(instr_id: str, cstack: List[var_T], clocals: List[var_T], u
             clocals.append('')
 
         clocals[idx] = cstack[0]
+        return f'\TEE{{{idx}}}'
 
     else:
         instr = [instr for instr in user_instr if instr['id'] == instr_id][0]
+        operands = []
+        # We consume the elements
+        for input_var in instr['inpt_sk']:
+            operands.append(str(cstack.pop(0)))
 
-        if instr["commutative"]:
-            input_vars = instr['inpt_sk']
-            assert len(input_vars) == 2, 'Commutative instructions with #args != 2'
-            # We consume the elements
-            s0, s1 = cstack.pop(0), cstack.pop(0)
-            assert (s0 == input_vars[0] and s1 == input_vars[1]) or (s0 == input_vars[1] and s1 == input_vars[0]), \
-                f"Args don't match in commutative instr {instr_id}"
+        joined_operands = ','.join(operands)
+        if "local.get" in instr["disasm"]:
+            idx = extract_idx_from_id(instr["outpt_sk"][0])
+            instr_name = f"s_{idx}"
+            final_instr_name = f'\GET{{{idx}}}'
 
         else:
-            # We consume the elements
-            for input_var in instr['inpt_sk']:
-                assert cstack[0] == input_var, f"Args don't match in non-commutative instr {instr_id}"
-                cstack.pop(0)
-
-        # We introduce the new elements
-        for output_var in reversed(instr['outpt_sk']):
-            cstack.insert(0, output_var)
-
-
-def check_deps(instr_ids: List[id_T], dependencies: List[Tuple[id_T, id_T]]) -> bool:
-    """
-    Check the ids from the final instructions satisfy the dependencies
-    """
-    pos_by_id = collections.defaultdict(lambda: [])
-    for i, instr in enumerate(instr_ids):
-        pos_by_id[instr].append(i)
-    if global_params.DEBUG_MODE:
-        for dep in dependencies:
-            print(dep, max(pos_by_id[dep[0]]) < min(pos_by_id[dep[1]]))
-    return all(max(pos_by_id[dep[0]]) < min(pos_by_id[dep[1]]) for dep in dependencies)
-
-
-def ensure_ids_are_unique(user_instr: List[instr_T]) -> bool:
-    accesses = set()
-    for instr in user_instr:
-        instr_id = instr['id']
-        if instr_id in accesses:
-            return False
-        else:
-            accesses.add(instr_id)
-    return True
-
-
-def ensure_stack_vars_are_unique(user_instr: List[instr_T]) -> bool:
-    accesses = set()
-    for instr in user_instr:
-        stack_vars = instr['outpt_sk']
-        for stack_var in stack_vars:
-            if stack_var in accesses:
-                return False
+            if "const" in instr["disasm"]:
+                instr_name = f"\PUSH{{{instr['value']}}}"
+            elif "shl" in instr["disasm"]:
+                instr_name = "\ishl"
+            elif "call" in instr["disasm"]:
+                instr_name = "\LOADz"
+            elif "store" in instr["disasm"]:
+                instr_name = f"\MSTORE{{{i}}}"
+            elif "rem" in instr["disasm"]:
+                instr_name = f"\irem"
             else:
-                accesses.add(stack_var)
-    return True
+                raise ValueError("Not recognized option")
+            final_instr_name = instr_name
+
+        if any(other_instr in instr["disasm"] for other_instr in ["load", "call", "store"]):
+            accesses.append(final_instr_name)
+
+        if joined_operands == '':
+            expression = instr_name
+        else:
+            expression = f'{instr_name}({joined_operands})'
+
+        if len(instr['outpt_sk']) == 1:
+            cstack.insert(0, expression)
+        if len(instr['outpt_sk']) > 1:
+            raise ValueError("Opcodes with more than one element returned are not supported")
+
+        return final_instr_name
+
+def print_state(instr_id: str, i: int, cstack: List[var_T], clocals: List[var_T], accesses: List[str]):
+    print(f"\\rightarrow_{{\\tinycode{{{i}:{instr_id}}}}} \\\\")
+    print(f"& ([{','.join(cstack)}],[{','.join(clocals)}],[{','.join(accesses)}])")
 
 
 def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     original_instr: str = sfs['original_instrs']
     user_instr: List[instr_T] = sfs['user_instrs']
-    # print(*(instr["disasm"] for instr in user_instr))
+    print(*(instr["disasm"] for instr in user_instr))
     instrs: List[str] = original_instr.split(' ')
     local_changes: List[Tuple[var_T, var_T]] = sfs['register_changes']
     dependencies: List[Tuple[id_T, id_T]] = sfs['dependencies']
@@ -226,59 +222,15 @@ def symbolic_execution_from_sfs(sfs: Dict) -> List[id_T]:
     final_instr_ids = [execute_instr(instr, i, cstack, clocals, ilocals, vars_, user_instr) for i, instr in
                        enumerate(instrs)]
 
-    assert ensure_ids_are_unique(user_instr), 'Ids are not unique'
-    assert ensure_stack_vars_are_unique(user_instr), 'Stack vars are not unique'
-    assert cstack == fstack, 'Stack do not match'
-    assert clocals == flocals, 'Locals do not match'
-    assert vars_ == sfs_vars, 'Vars do not match'
-    assert check_deps(final_instr_ids, dependencies), 'Dependencies are not coherent'
-
     # Check that the ids returned generate the final state
-    cstack, clocals_list = sfs['src_ws'].copy(), ilocals.copy()
+    cstack, clocals_list = [f"s_{i}" for i in range(len(sfs["src_ws"]))], [f"s_{i}" for i in range(len(sfs["src_ws"]) + len(clocals))]
     flocal_list = [local_repr[1] for local_repr in local_changes]
+    accesses = []
 
-    for instr_id in final_instr_ids:
-        execute_instr_id(instr_id, cstack, clocals_list, user_instr)
-    assert cstack == fstack, 'Ids - Stack do not match'
-    assert clocals_list == flocal_list, 'Ids - Locals do not match'
-
-    # print(final_instr_ids)
-    # print("They match!")
-    return final_instr_ids
-
-
-def check_execution_from_ids(sfs: Dict, instr_ids: List[id_T]) -> bool:
-    """
-    Given a SFS and a sequence of ids, checks the ids indeed represent a valid solution
-    """
-    user_instr: List[instr_T] = sfs['user_instrs']
-    local_changes: List[Tuple[var_T, var_T]] = sfs['register_changes']
-    dependencies: List[Tuple[id_T, id_T]] = sfs['dependencies']
-
-    # We split into two different dicts the initial values and final values in locals
-    ilocals: List[var_T] = [local_repr[0] for local_repr in local_changes]
-    cstack, fstack = sfs['src_ws'].copy(), sfs['tgt_ws']
-
-    # Check that the ids returned generate the final state
-    cstack, clocals_list = sfs['src_ws'].copy(), ilocals.copy()
-    flocal_list = [local_repr[1] for local_repr in local_changes]
-
-    for instr_id in instr_ids:
-        execute_instr_id(instr_id, cstack, clocals_list, user_instr)
-
-    if global_params.DEBUG_MODE and 'original_instrs_with_ids' in sfs:
-        print('Len initial', len(sfs['original_instrs_with_ids']))
-        print('Len final', len(instr_ids))
-
-    assert cstack == fstack, 'Ids - Stack do not match'
-    # Check only relevant locals
-    assert clocals_list[:len(flocal_list)] == flocal_list, 'Ids - Locals do not match'
-    assert check_deps(instr_ids, dependencies), 'Dependencies are not coherent'
-    for instr in user_instr:
-        if any(instr_name in instr["disasm"] for instr_name in ["call", "global.set", "store", "memory"]):
-            assert instr_ids.count(instr["id"]) == 1, "Mem operation used more than once"
-
-    return True
+    print_state("", -1, cstack, clocals_list, accesses)
+    for i, instr_id in enumerate(final_instr_ids):
+        name = execute_instr_id(instr_id, i, cstack, clocals_list, user_instr, accesses)
+        print_state(name, i, cstack, clocals_list, accesses)
 
 
 if __name__ == "__main__":

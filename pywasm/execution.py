@@ -867,6 +867,7 @@ class AbstractConfiguration:
                         name = f"function_{func_address}_block_{i}"
                     else:
                         name = f"function_{func_address}_block_{i}_{j}"
+                    print("Analyzing", name)
                     csv_row = self.exec_symbolic_block(block_split, name)
                     if csv_row is not None:
                         csv_rows.append(csv_row)
@@ -940,14 +941,15 @@ class AbstractConfiguration:
         try:
             json_sat['original_instrs_with_ids'] = symbolic_execution.symbolic_execution_from_sfs(json_sat)
         except Exception:
-            traceback.print_exc()
+            # traceback.print_exc()
+            pass
         json_sat['block'] = block_name
         allowed_deps, forbidden_immediate_dependencies = dependencies.immediate_dependencies(json_sat["user_instrs"],
                                                                                              json_sat["dependencies"])
         json_sat["non_immediate_dependencies"] = forbidden_immediate_dependencies
         store_json(json_sat, block_name)
 
-        tout = min(300, 10*(1+ sum(1 if instr["storage"] else 0 for instr in json_sat["user_instrs"])))
+        tout = 1 # min(300, 10*(1+ sum(1 if instr["storage"] else 0 for instr in json_sat["user_instrs"])))
         if global_params.UB_GREEDY:
             csv_info = superopt_and_greedy_from_json(json_sat, block_name, tout,
                                                      [str(instr) for instr in basic_block], rules_repr)
