@@ -948,7 +948,7 @@ class AbstractConfiguration:
                                                                                              json_sat["dependencies"])
         json_sat["non_immediate_dependencies"] = forbidden_immediate_dependencies
         store_json(json_sat, block_name)
-        tout = 1 # min(300, 10*(1+ sum(1 if instr["storage"] else 0 for instr in json_sat["user_instrs"])))
+        tout = 10*(1 + sum(1 if instr["storage"] else 0 for instr in json_sat["user_instrs"]))
         if global_params.UB_GREEDY:
             csv_info = superopt_and_greedy_from_json(json_sat, block_name, tout,
                                                      [str(instr) for instr in basic_block], rules_repr)
