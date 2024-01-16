@@ -856,8 +856,8 @@ class AbstractConfiguration:
             if len(initial_block) > 4:
                 initial_block = [instr for instr in block if instr.opcode not in instruction.beginning_basic_block_instrs and
                                  instr.opcode not in instruction.end_basic_block_instrs]
-                if global_params.SPLIT_BLOCK:
-                    blocks_split = split_blocks.split_simple(initial_block, 60)
+                if global_params.SPLIT_BLOCK != -1:
+                    blocks_split = split_blocks.split_simple(initial_block, global_params.SPLIT_BLOCK)
                 else:
                     blocks_split = [initial_block]
                 assert sum(len(subblock) for subblock in blocks_split) == len(initial_block)

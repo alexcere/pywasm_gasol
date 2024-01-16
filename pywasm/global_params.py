@@ -9,6 +9,6 @@ ISOLATED_NAME: str = "isolated"
 CONFIG_SAT: str = "all"
 EXTERNAL_SOLVER: bool = False
 UB_GREEDY: bool = False
-SPLIT_BLOCK: bool = False
+SPLIT_BLOCK: int = -1
 UB_SFS: bool = False
 

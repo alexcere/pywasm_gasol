@@ -36,8 +36,8 @@ def parse_args() -> Namespace:
     group_opt.add_argument('-usfs', '--ub-sfs', help='Compute an upper bound using the greedy algorithm and'
                                                      'stores the corresponding JSON file', action='store_true', dest='ub_sfs')
 
-    optimization_options.add_argument('-sp', '--split', help='Enable blocks split',
-                                      action='store_true', dest='split')
+    optimization_options.add_argument('-sp', '--split', help='Split large sequences to ensure they have at most SPLIT instructions',
+                                      action='store', type=int, dest='split', default=-1)
 
     sat_options = ap.add_argument_group('SAT Options', 'Options for enabling flags in SAT')
     sat_options.add_argument('-sat-d', '--sat-dominance', action='store', dest='config_sat',
