@@ -17,6 +17,7 @@ def parse_args() -> Namespace:
                                                       'representation instead of Wasm', action='store_true', dest='block')
     group_input.add_argument('-sfs', '--sfs', help='Uses the SFS representation from a JSON file',
                              action='store_true', dest='sfs')
+    group_input.add_argument('-info', action='store_true', dest='info')
 
     output_options = ap.add_argument_group('Output options')
     output_options.add_argument('-o', '--output', help="Folder to store blocks' specification",
@@ -70,7 +71,7 @@ def initialize(arguments: Namespace) -> None:
     pywasm.global_params.UB_GREEDY = arguments.ub_greedy
     pywasm.global_params.SPLIT_BLOCK = arguments.split
     pywasm.global_params.UB_SFS = arguments.ub_sfs
-
+    pywasm.global_params.INFO = arguments.info
 
 if __name__ == "__main__":
     parsed_args = parse_args()

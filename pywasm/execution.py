@@ -827,6 +827,8 @@ class AbstractConfiguration:
                 arity=len(function.type.rets.data),
             )
             self.set_frame(frame)
+            if global_params.INFO:
+                return self.info_from_blocks(function, function_args, func_address)
             return self.exec_symbolic(function, function_args, func_address)
         if isinstance(function, HostFunc):
             raise Exception(f'pywasm_gasol: host function not allowed to be executed')
@@ -871,6 +873,34 @@ class AbstractConfiguration:
                     csv_row = self.exec_symbolic_block(block_split, name)
                     if csv_row is not None:
                         csv_rows.append(csv_row)
+        return csv_rows, len(self.frame.expr.data)
+
+    def info_from_blocks(self, function: typing.Union[HostFunc, WasmFunc], function_args: typing.List[Value], func_address: int):
+
+        blocks = binary.Expression.blocks_from_instructions(self.frame.expr.data)
+        csv_rows = []
+        for i, block in enumerate(blocks):
+            # Group function args and local list as a single list of "local_{i}" symbolic values
+            # Only consider initial blocks with at least one instruction
+            initial_block = [instr for instr in block if
+                             instr.opcode not in instruction.beginning_basic_block_instrs and
+                             instr.opcode not in instruction.end_basic_block_instrs]
+            if global_params.SPLIT_BLOCK != -1:
+                blocks_split = split_blocks.split_simple(initial_block, global_params.SPLIT_BLOCK)
+            else:
+                blocks_split = [initial_block]
+            assert sum(len(subblock) for subblock in blocks_split) == len(initial_block)
+            for j, block_split in enumerate(blocks_split):
+                self.initialize_frame(function, function_args)
+                if len(blocks_split) == 1:
+                    name = f"function_{func_address}_block_{i}"
+                else:
+                    name = f"function_{func_address}_block_{i}_{j}"
+                print("Analyzing", name)
+                if len(block_split) > 0:
+                    csv_row = {"block_id": name, "initial_n_instrs": len(block_split)}
+                    csv_rows.append(csv_row)
+
         return csv_rows, len(self.frame.expr.data)
 
     def print_block(self, stack, memory_accesses, var_accesses, call_accesses):

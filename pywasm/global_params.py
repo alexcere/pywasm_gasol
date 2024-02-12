@@ -11,4 +11,4 @@ EXTERNAL_SOLVER: bool = False
 UB_GREEDY: bool = False
 SPLIT_BLOCK: int = -1
 UB_SFS: bool = False
-
+INFO: bool = False
