@@ -977,7 +977,8 @@ class AbstractConfiguration:
         allowed_deps, forbidden_immediate_dependencies = dependencies.immediate_dependencies(json_sat["user_instrs"],
                                                                                              json_sat["dependencies"])
         json_sat["non_immediate_dependencies"] = forbidden_immediate_dependencies
-        store_json(json_sat, block_name)
+        if global_params.DEBUG_MODE:
+            store_json(json_sat, block_name)
         tout = 10*(1 + sum(1 if instr["storage"] else 0 for instr in json_sat["user_instrs"]))
         if global_params.UB_GREEDY:
             csv_info = superopt_and_greedy_from_json(json_sat, block_name, tout,
@@ -989,7 +990,8 @@ class AbstractConfiguration:
         elif global_params.UB_SFS:
             csv_info = {}
             modify_bound(json_sat, tout)
-            store_json(json_sat, block_name)
+            if global_params.DEBUG_MODE:
+                store_json(json_sat, block_name)
         else:
             csv_info = superopt_from_json(json_sat, block_name, tout, [str(instr) for instr in basic_block],
                                           rules_repr)
