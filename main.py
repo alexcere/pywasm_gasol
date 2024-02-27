@@ -7,9 +7,7 @@ import pywasm
 sys.path.append(os.path.dirname(os.path.realpath(__file__))+"/evmopt/evmx")
 
 
-def parse_args() -> Namespace:
-    ap = ArgumentParser(description='Wasm Block Functional Specification tool')
-
+def options_wasm(ap: ArgumentParser) -> None:
     input_options = ap.add_argument_group('Input options')
     group_input = input_options.add_mutually_exclusive_group()
     input_options.add_argument('input_file', help='Wasm file to analyze', action='store')
@@ -45,6 +43,8 @@ def parse_args() -> Namespace:
                              choices=['all', 'base', 'e', 'f', 'g', 'h', 'allbutf'], default='all')
     sat_options.add_argument('-ext', '--ext', action='store_true', dest='external')
 
+
+def parse_args_wasm(ap: ArgumentParser) -> Namespace:
     return ap.parse_args()
 
 
@@ -73,9 +73,8 @@ def initialize(arguments: Namespace) -> None:
     pywasm.global_params.UB_SFS = arguments.ub_sfs
     pywasm.global_params.INFO = arguments.info
 
-if __name__ == "__main__":
-    parsed_args = parse_args()
-    initialize(parsed_args)
+
+def main(parsed_args: Namespace) -> None:
     if parsed_args.block:
         pywasm.symbolic_exec_from_block(parsed_args.input_file)
     elif parsed_args.sfs:
@@ -84,3 +83,11 @@ if __name__ == "__main__":
         runtime = pywasm.load(parsed_args.input_file)
         # r = runtime.exec('main', [5,6])
         runtime.all_symbolic_exec()
+
+
+if __name__ == "__main__":
+    ap = ArgumentParser(description='Wasm Block Functional Specification tool')
+    options_wasm(ap)
+    parsed_args = parse_args_wasm(ap)
+    initialize(parsed_args)
+    main(parsed_args)
